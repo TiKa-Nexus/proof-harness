@@ -1,5 +1,5 @@
 // Import External Packages
-import { NextResponse } from "next/server";
+import { NextResponse } from "next/server.js";
 // Import Local Imports
 // Import Core Dependencies
 // Import Shared Dependencies

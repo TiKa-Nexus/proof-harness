@@ -123,7 +123,16 @@ describe("@saasist/proof package contents", () => {
     const tarball = path.join(packDirectory, packed.filename);
     run(
       "npm",
-      ["install", "--ignore-scripts", "--legacy-peer-deps", tarball],
+      [
+        "install",
+        "--ignore-scripts",
+        "--legacy-peer-deps",
+        tarball,
+        "next@16.3.0",
+        "react@19.2.1",
+        "react-dom@19.2.1",
+        "@supabase/supabase-js@2.108.2",
+      ],
       consumer,
     );
     const installedPackageText = readTextTree(
@@ -145,16 +154,19 @@ describe("@saasist/proof package contents", () => {
         [
           'import * as shared from "@saasist/proof/shared";',
           'import * as nodeApi from "@saasist/proof/node";',
+          'import * as serverApi from "@saasist/proof/server";',
           'import * as vocabulary from "@saasist/proof/portable-vocabulary";',
           'if (!shared.TRACE_ARTIFACT_SCHEMA_VERSION) throw new Error("shared export missing");',
           'if (typeof nodeApi.validateMission !== "function") throw new Error("node export missing");',
+          'if (typeof serverApi.proofGuard !== "function") throw new Error("server export missing");',
           'if (!vocabulary.ACTION_CHANGE_KINDS) throw new Error("vocabulary export missing");',
-          'console.log("consumer-import-ok");',
+          'console.log("consumer-import-ok server-import-ok");',
         ].join(""),
       ],
       consumer,
     );
     expect(importOutput).toContain("consumer-import-ok");
+    expect(importOutput).toContain("server-import-ok");
 
     const binOutput = run(
       "node",
