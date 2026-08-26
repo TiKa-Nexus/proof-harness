@@ -37,7 +37,10 @@ package does not ship product seed credentials.
 
 ## License
 
-Copyright 2026 SaaSist / botstrap-workbench.
+Copyright 2026 The Nexus Collective GmbH.
+
+Created and maintained by Till Kahlen at
+[The Nexus Collective GmbH](https://nexuscollective.io).
 
 Licensed under the [Apache License 2.0](./LICENSE).
 

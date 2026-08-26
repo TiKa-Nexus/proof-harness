@@ -3,6 +3,10 @@
   "version": "0.1.0-next.1",
   "description": "Verification and conformance helpers for proof traces, missions, fixtures, and Playwright probes.",
   "license": "Apache-2.0",
+  "author": {
+    "name": "The Nexus Collective GmbH",
+    "url": "https://nexuscollective.io"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/TiKa-Nexus/proof-harness.git"
