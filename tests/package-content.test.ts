@@ -47,8 +47,28 @@ function readTextTree(directory: string): string {
   return contents.join("\n");
 }
 
-describe("@saasist/proof package contents", () => {
+describe("proof-harness package contents", () => {
   it("packs only package-owned runtime, contracts, and fixtures", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "package.json"), "utf8"),
+    ) as Record<string, unknown>;
+    expect(manifest).toMatchObject({
+      name: "proof-harness",
+      version: "0.1.0-next.1",
+      license: "Apache-2.0",
+      repository: {
+        type: "git",
+        url: "git+https://github.com/TiKa-Nexus/proof-harness.git",
+      },
+      homepage: "https://github.com/TiKa-Nexus/proof-harness#readme",
+      bugs: {
+        url: "https://github.com/TiKa-Nexus/proof-harness/issues",
+      },
+      bin: {
+        "proof-harness": "./cli/proof-harness.mjs",
+      },
+    });
+
     const packDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "proof-pack-"));
     temporaryDirectories.push(packDirectory);
     const [packed] = JSON.parse(
@@ -63,8 +83,9 @@ describe("@saasist/proof package contents", () => {
     const files = packed.files.map((entry) => entry.path);
 
     expect(packed).toMatchObject({
-      name: "@saasist/proof",
+      name: "proof-harness",
       version: "0.1.0-next.1",
+      filename: "proof-harness-0.1.0-next.1.tgz",
     });
     expect(files).toEqual(
       expect.arrayContaining([
@@ -73,7 +94,7 @@ describe("@saasist/proof package contents", () => {
         "README.md",
         "COMPATIBILITY.md",
         "PROOF_SDK_CONTRACT.md",
-        "cli/saasist-proof.mjs",
+        "cli/proof-harness.mjs",
         "cli/config.mjs",
         "dist/shared.js",
         "dist/shared.d.ts",
@@ -138,7 +159,7 @@ describe("@saasist/proof package contents", () => {
       consumer,
     );
     const installedPackageText = readTextTree(
-      path.join(consumer, "node_modules", "@saasist", "proof"),
+      path.join(consumer, "node_modules", "proof-harness"),
     );
     for (const credential of [
       "dev-admin@example.com",
@@ -154,10 +175,10 @@ describe("@saasist/proof package contents", () => {
         "--input-type=module",
         "--eval",
         [
-          'import * as shared from "@saasist/proof/shared";',
-          'import * as nodeApi from "@saasist/proof/node";',
-          'import * as serverApi from "@saasist/proof/server";',
-          'import * as vocabulary from "@saasist/proof/portable-vocabulary";',
+          'import * as shared from "proof-harness/shared";',
+          'import * as nodeApi from "proof-harness/node";',
+          'import * as serverApi from "proof-harness/server";',
+          'import * as vocabulary from "proof-harness/portable-vocabulary";',
           'if (!shared.TRACE_ARTIFACT_SCHEMA_VERSION) throw new Error("shared export missing");',
           'if (typeof nodeApi.validateMission !== "function") throw new Error("node export missing");',
           'if (typeof serverApi.proofGuard !== "function") throw new Error("server export missing");',
@@ -172,9 +193,9 @@ describe("@saasist/proof package contents", () => {
 
     const binOutput = run(
       "node",
-      ["node_modules/@saasist/proof/cli/saasist-proof.mjs", "--help"],
+      ["node_modules/proof-harness/cli/proof-harness.mjs", "--help"],
       consumer,
     );
-    expect(binOutput).toContain("Usage: saasist-proof");
+    expect(binOutput).toContain("Usage: proof-harness");
   }, 120_000);
 });

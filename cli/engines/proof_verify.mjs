@@ -231,7 +231,7 @@ async function runProofs(provenance) {
         console.error(
           `[PROOF_FAIL] playwright_browser_missing: expected Chromium binary to be installed; found it missing from the Playwright cache.\n` +
             `  hint: Run \`pnpm exec playwright install chromium\` once per machine, then retry.\n` +
-            `  command: saasist-proof verify`,
+            `  command: proof-harness verify`,
         );
       }
       resolve(code === 0);

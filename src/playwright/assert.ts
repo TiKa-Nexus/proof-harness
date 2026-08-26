@@ -69,7 +69,7 @@ function proofFail(
 ): Error {
   return new Error(
     `[PROOF_FAIL] ${category}: expected ${expected}, found ${found}\n` +
-      `  file: ${extras.file ?? "packages/proof/src/playwright/assert.ts"}\n` +
+      `  file: ${extras.file ?? "src/playwright/assert.ts"}\n` +
       `  suggestion: ${extras.suggestion}`,
   );
 }
@@ -623,7 +623,7 @@ async function runRlsProbe(
     if (!probe.payload) {
       throw new Error(
         "[PROOF_FAIL] bad_probe: rls.op='insert' requires `payload`\n" +
-          "  file: packages/proof/src/playwright/assert.ts",
+          "  file: src/playwright/assert.ts",
       );
     }
 
@@ -701,7 +701,7 @@ async function runRlsProbe(
   if (!probe.filter) {
     throw new Error(
       `[PROOF_FAIL] bad_probe: rls.op='${probe.op}' requires \`filter\`\n` +
-        "  file: packages/proof/src/playwright/assert.ts",
+        "  file: src/playwright/assert.ts",
     );
   }
 
@@ -787,7 +787,7 @@ async function runRlsProbe(
   if (!probe.payload || Object.keys(probe.payload).length === 0) {
     throw new Error(
       "[PROOF_FAIL] bad_probe: rls.op='update' requires a non-empty `payload`\n" +
-        "  file: packages/proof/src/playwright/assert.ts\n" +
+        "  file: src/playwright/assert.ts\n" +
         "  suggestion: The payload is both the attempted change and the way the probe verifies whether it was applied.",
     );
   }
@@ -1487,14 +1487,14 @@ const assertMethods = {
     if (!opts.rls && !opts.action) {
       throw new Error(
         "[PROOF_FAIL] bad_options: assert.authorization requires at least one of `rls` or `action`\n" +
-          "  file: packages/proof/src/playwright/assert.ts\n" +
+          "  file: src/playwright/assert.ts\n" +
           "  suggestion: Pass an `rls` probe for DB-layer denial or an `action` probe for action-layer denial (or both).",
       );
     }
     if (opts.action && !opts.page) {
       throw new Error(
         "[PROOF_FAIL] bad_options: assert.authorization's `action` probe requires a Playwright `page`\n" +
-          "  file: packages/proof/src/playwright/assert.ts\n" +
+          "  file: src/playwright/assert.ts\n" +
           "  suggestion: Destructure `page` from the test callback and pass it in.",
       );
     }
@@ -1665,7 +1665,7 @@ const assertMethods = {
         `[PROOF_FAIL] ${opts.kind}: response from ${method} ${opts.path} did not match expectations\n` +
           `  status: ${status}\n` +
           `  failures:\n${failures.map((f) => `    - ${f}`).join("\n")}\n` +
-          `  file: packages/proof/src/playwright/assert.ts\n` +
+          `  file: src/playwright/assert.ts\n` +
           `  suggestion: ${opts.expect.mustContain || opts.expect.mustNotContain ? "For streaming RSC routes, assert on body markers rather than status. See .cursor/rules/proof-authoring.mdc." : "Check the route handler or page component and confirm the expected response shape."}`,
       );
     }

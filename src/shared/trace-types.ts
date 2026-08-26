@@ -14,7 +14,7 @@ import type { ProofKind } from "./vocabulary";
 //   - `proofId`    — per-file id; what _this_ proof verifies (e.g. "auth-login-admin",
 //                    "workspace-invite-tenant-isolation"). The filename is keyed on it,
 //                    so proofs never collide.
-//   - `missionId`  — optional Botstrap ticket reference (e.g. "M-042"). A single mission
+//   - `missionId`  — optional external ticket reference (e.g. "M-042"). A single mission
 //                    typically has multiple proofs (happy_path + tenant_isolation +
 //                    authorization), each with its own file. The v1 mission-manifest
 //                    validator groups by `missionId` and checks that every
@@ -304,7 +304,7 @@ export interface TraceArtifact {
    */
   proofId: string;
   /**
-   * Optional reference to the Botstrap mission (ticket) this proof belongs
+   * Optional reference to the external mission (ticket) this proof belongs
    * to. Multiple proofs share one `missionId`. Absent in v0.5 local runs
    * that are not tied to a mission.
    */

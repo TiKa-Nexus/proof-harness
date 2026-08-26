@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 // Import Extension Dependencies
 
 // ---------------------------------------------------------------------------
-// Playwright loads `@saasist/proof/playwright` in plain Node, not as a React Server
+// Playwright loads `proof-harness/playwright` in plain Node, not as a React Server
 // Component. `import "server-only"` throws during test *discovery*, so the
 // suite never starts and `.proof/traces/` stays empty — no evidence, not bad
 // evidence. Vitest mocks `server-only` to `{}`, so importing a guarded module

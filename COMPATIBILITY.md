@@ -1,6 +1,6 @@
 # Compatibility
 
-| `@saasist/proof` | Trace artifact schema | Mission manifest schema | Proof health protocol | Node.js |
+| `proof-harness` | Trace artifact schema | Mission manifest schema | Proof health protocol | Node.js |
 | --- | ---: | ---: | ---: | --- |
 | `0.1.x` | 2 | 1 | 1 | 24 |
 
@@ -11,7 +11,7 @@ Consumers must pin an exact prerelease version, for example:
 ```json
 {
   "devDependencies": {
-    "@saasist/proof": "0.1.0-next.1"
+    "proof-harness": "0.1.0-next.1"
   }
 }
 ```

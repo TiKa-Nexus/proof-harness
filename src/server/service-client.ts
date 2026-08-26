@@ -29,7 +29,7 @@ function requireProofEnv(name: string): string {
   if (!value) {
     throw new Error(
       `[PROOF_FAIL] missing_env: expected ${name}, found empty\n` +
-        "  file: packages/proof/src/server/service-client.ts\n" +
+        "  file: src/server/service-client.ts\n" +
         "  suggestion: Ensure CI exports the Supabase env vars before running pnpm proof:verify.",
     );
   }

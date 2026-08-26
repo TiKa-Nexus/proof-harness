@@ -6,12 +6,12 @@ import {
   validateMission,
   type CapabilitiesArtifact,
   type SchemaArtifact,
-} from "@saasist/proof/node";
+} from "proof-harness/node";
 import {
   normalizeAssertionRole,
   type MissionManifest,
   type TraceArtifact,
-} from "@saasist/proof/shared";
+} from "proof-harness/shared";
 
 type JsonObject = Record<string, unknown>;
 

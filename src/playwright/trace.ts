@@ -239,7 +239,7 @@ export const trace = {
    * await trace.proof("auth-login-admin", async (t) => { ... });
    *
    * @example
-   * // v1 case: proof belongs to a Botstrap mission
+   * // v1 case: proof belongs to an external mission
    * await trace.proof(
    *   { proofId: "auth-login-admin", missionId: "M-042" },
    *   async (t) => { ... },

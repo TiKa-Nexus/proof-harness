@@ -62,7 +62,7 @@ function getProofSecret(): string {
   if (!secret) {
     throw new Error(
       "[PROOF_FAIL] proof_secret_missing: API_SECRET_KEY is not set in the test runner env\n" +
-        "  file: packages/proof/src/playwright/actAsUser.ts\n" +
+        "  file: src/playwright/actAsUser.ts\n" +
         "  suggestion: Run setup-local-env.sh or ensure .env.local is loaded. Playwright tests need API_SECRET_KEY to sign proof requests.",
     );
   }
@@ -121,7 +121,7 @@ async function callLoginRoute(
       : "auth_signin";
     throw new Error(
       `[PROOF_FAIL] ${category}: login failed for ${label} (status ${response.status()})\n` +
-        `  file: packages/proof/src/playwright/actAsUser.ts\n` +
+        `  file: src/playwright/actAsUser.ts\n` +
         `  suggestion: ${body.suggestion ?? body.error ?? "Check that the dev server is running and seed users exist."}`,
     );
   }
@@ -131,7 +131,7 @@ async function callLoginRoute(
   if (!json.ok) {
     throw new Error(
       "[PROOF_FAIL] auth_signin: login route returned ok:false\n" +
-        "  file: packages/proof/src/playwright/actAsUser.ts\n" +
+        "  file: src/playwright/actAsUser.ts\n" +
         "  suggestion: Inspect the response body of /api/proof/login-as-seed-user.",
     );
   }
@@ -145,8 +145,8 @@ async function callLoginRoute(
 export const actAsUser = {
   /**
    * Log in as one of the seeded development users (`admin` or `member`).
-   * Uses server-only `SEED_*_EMAIL` / `SEED_*_PASSWORD` env vars,
-   * falling back to the baked-in defaults shipped with the template.
+   * The consumer application's proof login route resolves the role to its
+   * configured server-only seed credentials.
    */
   async login(page: Page, role: "admin" | "member"): Promise<void> {
     await callLoginRoute(page, { role });
@@ -231,7 +231,7 @@ export const actAsUser = {
     } catch {
       throw new Error(
         `[PROOF_FAIL] action_invoke: response from /api/proof/invoke-action is not valid JSON (status ${response.status()})\n` +
-          "  file: packages/proof/src/playwright/actAsUser.ts\n" +
+          "  file: src/playwright/actAsUser.ts\n" +
           "  suggestion: The dev server likely returned an error page. Check server logs and confirm the route file at app/api/proof/invoke-action/route.ts is registered.",
       );
     }
@@ -240,7 +240,7 @@ export const actAsUser = {
       const harnessError = body as Partial<ActionInvokeErrorResponse>;
       throw new Error(
         `${typeof harnessError.error === "string" ? harnessError.error : `[PROOF_FAIL] action_invoke: harness request failed (status ${response.status()})`}\n` +
-          "  file: packages/proof/src/playwright/actAsUser.ts\n" +
+          "  file: src/playwright/actAsUser.ts\n" +
           `  suggestion: ${harnessError.suggestion ?? "Inspect /api/proof/invoke-action and confirm the action is registered and pipeline-wrapped."}`,
       );
     }
@@ -248,7 +248,7 @@ export const actAsUser = {
     if (!isActionResult<TData>(body)) {
       throw new Error(
         `[PROOF_FAIL] action_invoke: response body is not a valid ActionResult shape (status ${response.status()})\n` +
-          `  file: packages/proof/src/playwright/actAsUser.ts\n` +
+          `  file: src/playwright/actAsUser.ts\n` +
           `  body: ${JSON.stringify(body)}\n` +
           "  suggestion: The invoke route must always return { success, data } or { success: false, error }. Confirm PROOF_ACTION_REGISTRY contains the action and that it uses createAction().",
       );
@@ -279,7 +279,7 @@ export const actAsUser = {
     if (!url || !publishableKey) {
       throw new Error(
         "[PROOF_FAIL] config_missing: expected NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY to be set, found one or both missing\n" +
-          "  file: packages/proof/src/playwright/actAsUser.ts\n" +
+          "  file: src/playwright/actAsUser.ts\n" +
           "  suggestion: Run setup-local-env.sh or load .env.local before running proof specs.",
       );
     }
@@ -312,7 +312,7 @@ export const actAsUser = {
         : "auth_signin";
       throw new Error(
         `[PROOF_FAIL] ${category}: expected successful sign-in for ${opts.email}, found signInWithPassword error: ${error.message}\n` +
-          "  file: packages/proof/src/playwright/actAsUser.ts\n" +
+          "  file: src/playwright/actAsUser.ts\n" +
           `  suggestion: ${
             category === "auth_rate_limited"
               ? "The auth budget is exhausted, not the credentials. Wait for the window to reset or reduce parallel proof workers."

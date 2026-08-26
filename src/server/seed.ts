@@ -47,7 +47,7 @@ function failProof(
 ): never {
   throw new Error(
     `[PROOF_FAIL] ${category}: expected ${expected}, found ${found}\n` +
-      `  file: packages/proof/src/server/seed.ts\n` +
+      `  file: src/server/seed.ts\n` +
       `  suggestion: ${suggestion}`,
   );
 }

@@ -1,8 +1,8 @@
-# Proof SDK — Consumer Integration Contract
+# Proof Harness — Consumer Integration Contract
 
-This document describes what an external consumer (Botstrap, a bespoke
+This document describes what an external consumer (an orchestrator, bespoke
 automation, or a human developer in manual mode) must do to drive a product
-repo built on this template through mission-based verification.
+repository through mission-based verification.
 
 If you are building the template, see [`.cursor/rules/proof-authoring.mdc`](.cursor/rules/proof-authoring.mdc)
 instead; this document is for anyone _consuming_ the template.
@@ -109,7 +109,7 @@ for a worked example. The full schema:
   "schemaVersion": 1,
   "missionId": "M-042", // stable ticket id; also the filename of the merged trace
   "missionTitle": "Add issue tracking with assignees",
-  "productRepo": "botstrap-generated/acme-issues", // informational
+  "productRepo": "example-org/acme-issues", // informational
   "prBranch": "feature/M-042-issue-tracking", // informational
   "createdAt": "2026-04-16T10:30:00Z", // ISO-8601
   "requirements": {
@@ -653,9 +653,9 @@ corpus.
     "commit": "a1b2c3d…",
     "branch": "feature/M-042-issue-tracking",
     "dirty": false, // true when the working tree had uncommitted changes
-    "repository": "botstrap-generated/acme-issues",
+    "repository": "example-org/acme-issues",
     "ci": true,
-    "command": "saasist-proof verify",
+    "command": "proof-harness verify",
     "nodeVersion": "v24.19.0",
     "platform": "linux",
   },
@@ -1119,7 +1119,7 @@ sequenceDiagram
   "schemaVersion": 1,
   "missionId": "M-042",
   "missionTitle": "Add issue tracking with assignees",
-  "productRepo": "botstrap-generated/acme-issues",
+  "productRepo": "example-org/acme-issues",
   "prBranch": "feature/M-042-issue-tracking",
   "createdAt": "2026-04-16T10:30:00Z",
   "requirements": {

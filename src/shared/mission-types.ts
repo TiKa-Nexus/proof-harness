@@ -1,10 +1,10 @@
 // ---------------------------------------------------------------------------
 // Mission manifest types.
 //
-// A *mission manifest* is the JSON artifact an external consumer (Botstrap,
-// or a developer in manual mode) writes to `.proof/current-mission.json` to
+// A *mission manifest* is the JSON artifact an external orchestrator or a
+// developer in manual mode writes to `.proof/current-mission.json` to
 // tell `pnpm proof:verify` what the PR must prove. The validator at
-// `packages/proof/src/node/validate-mission.ts` cross-references each
+// `src/node/validate-mission.ts` cross-references each
 // requirement against the fresh `.proof/capabilities.json`, `.proof/schema.json`,
 // and the aggregated trace.
 //
@@ -154,7 +154,7 @@ export type EvidenceOrigin = "helper" | "any";
 
 /**
  * The evidence origin a requirement demands, applying the kind-based default.
- * Consumed directly by the compiled validator used by `saasist-proof verify`.
+ * Consumed directly by the compiled validator used by `proof-harness verify`.
  */
 export function requiredEvidenceOrigin(
   kind: ProofKind,

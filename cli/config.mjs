@@ -74,7 +74,7 @@ function mergeConfig(config = {}) {
 
 export async function loadProofConfig({
   cwd = process.cwd(),
-  configPath = process.env.SAASIST_PROOF_CONFIG,
+  configPath = process.env.PROOF_HARNESS_CONFIG,
 } = {}) {
   const requested = configPath
     ? path.resolve(cwd, configPath)

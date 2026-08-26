@@ -116,7 +116,7 @@ export interface ModuleDefault {
 
 /**
  * The declared half — everything a person writes. The derived half is added by
- * `saasist-proof modules`.
+ * `proof-harness modules`.
  */
 export interface ModuleMeta {
   /** Directory name. Checked against where the file sits. */

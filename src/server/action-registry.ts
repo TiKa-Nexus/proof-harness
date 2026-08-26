@@ -11,7 +11,7 @@
 // The publishable package exports only the opaque handler type so a generated
 // registry can be typed without pulling application actions into the package.
 //
-// SaaSist's implementation is generated from explicit withProof claims, derived
+// The consumer implementation is generated from explicit withProof claims, derived
 // service-role action requirements, and literal action probes in proof specs.
 // It is consumed by `POST /api/proof/invoke-action` so Playwright specs can
 // invoke a real server action end-to-end while authenticated as a specific user.

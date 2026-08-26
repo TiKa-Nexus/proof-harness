@@ -1,4 +1,4 @@
-name: Publish next prerelease
+name: Publish proof-harness next prerelease
 
 on:
   workflow_dispatch:
@@ -46,5 +46,5 @@ jobs:
           NODE
       - name: Verify release candidate
         run: pnpm check
-      - name: Publish with npm provenance
+      - name: Publish proof-harness with npm provenance
         run: npm publish --provenance --tag next --access public

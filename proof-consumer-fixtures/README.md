@@ -46,14 +46,14 @@ same reasons.
 ## Running the reference checks
 
 ```bash
-pnpm exec vitest run scripts/__tests/proof-consumer-fixtures.test.ts
+pnpm conformance
 ```
 
 External orchestrators should run this same directory through their production
-ingestion path and assert the outcomes in `corpus.json`. Template tests prove
-that the fixtures agree with the canonical mission validator; they cannot prove
-that another system preserves the same classifications after download,
-extraction, storage, or deduplication.
+ingestion path and assert the outcomes in `corpus.json`. The package conformance
+tests prove that the fixtures agree with the canonical mission validator; they
+cannot prove that another system preserves the same classifications after
+download, extraction, storage, or deduplication.
 
 GitHub token permissions, check-run classification, and repository-readiness
 polling are intentionally outside this corpus because they are integration

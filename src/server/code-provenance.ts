@@ -33,7 +33,7 @@ export interface CodeProvenance {
   dirty?: boolean;
 }
 
-/** Environment variables `saasist-proof verify` sets for the spec run. */
+/** Environment variables `proof-harness verify` sets for the spec run. */
 export const PROOF_COMMIT_ENV = "PROOF_COMMIT";
 export const PROOF_DIRTY_ENV = "PROOF_DIRTY";
 

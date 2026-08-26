@@ -21,14 +21,14 @@ const ENGINES = {
 };
 
 function printHelp() {
-  console.log(`Usage: saasist-proof [--config <path>] <command> [flags]
+  console.log(`Usage: proof-harness [--config <path>] <command> [flags]
 
 Commands:
   scan, parse, registry, build, verify, coverage, inventory, drift,
   modules, modules-check, mutate
 
 Repository paths and the protected mutation catalog are read from
-proof.config.mjs. Missing config falls back to the SaaSist template layout.`);
+proof.config.mjs. Missing config falls back to a conventional application layout.`);
 }
 
 function runEngine(command, args, config) {
@@ -42,7 +42,7 @@ function runEngine(command, args, config) {
       env: {
         ...process.env,
         ...(config.configPath
-          ? { SAASIST_PROOF_CONFIG: config.configPath }
+          ? { PROOF_HARNESS_CONFIG: config.configPath }
           : {}),
       },
       stdio: "inherit",
@@ -99,7 +99,7 @@ if (invokedDirectly) {
     },
     (error) => {
       console.error(
-        `[saasist-proof] ${error instanceof Error ? error.message : String(error)}`,
+        `[proof-harness] ${error instanceof Error ? error.message : String(error)}`,
       );
       process.exitCode = 2;
     },

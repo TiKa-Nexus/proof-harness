@@ -194,7 +194,7 @@ export function renderRegistry(entries) {
     "",
     ...imports,
     ...(imports.length > 0 ? [""] : []),
-    'import type { ProofActionHandler } from "@saasist/proof/server";',
+    'import type { ProofActionHandler } from "proof-harness/server";',
     "",
     "export const PROOF_ACTION_REGISTRY: Record<string, ProofActionHandler> = {",
     ...rows,

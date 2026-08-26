@@ -1,8 +1,16 @@
 {
-  "name": "@saasist/proof",
+  "name": "proof-harness",
   "version": "0.1.0-next.1",
-  "description": "Verification and conformance helpers for SaaSist proof traces, missions, fixtures, and Playwright probes.",
+  "description": "Verification and conformance helpers for proof traces, missions, fixtures, and Playwright probes.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TiKa-Nexus/proof-harness.git"
+  },
+  "homepage": "https://github.com/TiKa-Nexus/proof-harness#readme",
+  "bugs": {
+    "url": "https://github.com/TiKa-Nexus/proof-harness/issues"
+  },
   "type": "module",
   "files": [
     "dist",
@@ -13,7 +21,7 @@
     "proof-consumer-fixtures"
   ],
   "bin": {
-    "saasist-proof": "./cli/saasist-proof.mjs"
+    "proof-harness": "./cli/proof-harness.mjs"
   },
   "sideEffects": false,
   "exports": {
