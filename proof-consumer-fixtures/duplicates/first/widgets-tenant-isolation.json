@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 2,
+  "proofId": "widgets-tenant-isolation",
+  "specFile": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+  "specHash": "0123456789ab",
+  "commit": "3333333333333333333333333333333333333333",
+  "dirty": false,
+  "timestamp": "2026-08-24T12:04:00.000Z",
+  "durationMs": 10,
+  "passed": true,
+  "steps": []
+}

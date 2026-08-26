@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "missionId": "M-CONFORMANCE",
+  "provenance": {
+    "commit": "1111111111111111111111111111111111111111",
+    "branch": "feature/proof-consumer",
+    "dirty": false,
+    "repository": "example/proof-consumer",
+    "ci": true,
+    "runId": "1001",
+    "command": "node scripts/proof_verify.mjs",
+    "nodeVersion": "v24.6.0",
+    "platform": "linux-x64"
+  },
+  "passed": true,
+  "aggregatedAt": "2026-08-24T12:01:30.000Z",
+  "manifestSummary": {
+    "missionTitle": "Consumer conformance fixture",
+    "capabilities_must_exist": 0,
+    "schema_must_contain": 0,
+    "trace_must_prove": 1
+  },
+  "issues": [],
+  "requirementEvidence": [
+    {
+      "kind": "tenant_isolation",
+      "target": "widgets",
+      "role": "primary",
+      "satisfied": true,
+      "proofId": "widgets-tenant-isolation",
+      "specFile": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+      "detail": "outsider saw 0 of 1 widget rows",
+      "emittedBy": "assert.tenantIsolation"
+    }
+  ],
+  "proofs": [
+    {
+      "proofId": "widgets-tenant-isolation",
+      "missionId": "M-CONFORMANCE",
+      "specFile": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+      "specHash": "0123456789ab",
+      "passed": true,
+      "durationMs": 24,
+      "stepCount": 1,
+      "assertionCount": 2,
+      "assertionStatus": {
+        "passed": 2,
+        "failed": 0,
+        "incomplete": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "traces": [
+    {
+      "schemaVersion": 2,
+      "proofId": "widgets-tenant-isolation",
+      "missionId": "M-CONFORMANCE",
+      "specFile": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+      "specHash": "0123456789ab",
+      "commit": "1111111111111111111111111111111111111111",
+      "dirty": false,
+      "timestamp": "2026-08-24T12:01:00.000Z",
+      "durationMs": 24,
+      "passed": true,
+      "steps": [
+        {
+          "intent": "Prove workspace B cannot select workspace A's widgets",
+          "kind": "tenant_isolation",
+          "target": "widgets",
+          "observation": "The outsider saw 0 of 1 rows and the owner saw the fixture row.",
+          "passed": true,
+          "actor": "member",
+          "workspaceId": "00000000-0000-0000-0000-000000000001",
+          "durationMs": 24,
+          "assertions": [
+            {
+              "kind": "tenant_isolation",
+              "target": "widgets",
+              "operation": "select",
+              "passed": true,
+              "status": "passed",
+              "role": "primary",
+              "detail": "outsider saw 0 of 1 widget rows",
+              "emittedBy": "assert.tenantIsolation"
+            },
+            {
+              "kind": "happy_path",
+              "target": "widgets",
+              "operation": "select",
+              "passed": true,
+              "status": "passed",
+              "role": "control",
+              "detail": "owner saw the fixture widget row"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

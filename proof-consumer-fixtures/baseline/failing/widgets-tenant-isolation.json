@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "proofId": "widgets-tenant-isolation",
+  "missionId": "M-CONFORMANCE",
+  "specFile": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+  "specHash": "0123456789ab",
+  "commit": "2222222222222222222222222222222222222222",
+  "dirty": false,
+  "timestamp": "2026-08-24T12:02:00.000Z",
+  "durationMs": 25,
+  "passed": false,
+  "steps": [
+    {
+      "intent": "Prove workspace B cannot select workspace A's widgets",
+      "kind": "tenant_isolation",
+      "target": "widgets",
+      "observation": "The outsider unexpectedly saw the fixture row.",
+      "passed": false,
+      "actor": "member",
+      "workspaceId": "00000000-0000-0000-0000-000000000001",
+      "durationMs": 25,
+      "error": "[PROOF_FAIL] tenant_isolation: expected 0 rows; found 1; check widgets SELECT policy",
+      "assertions": [
+        {
+          "kind": "tenant_isolation",
+          "target": "widgets",
+          "operation": "select",
+          "passed": false,
+          "status": "failed",
+          "role": "primary",
+          "detail": "outsider saw 1 of 1 widget rows",
+          "emittedBy": "assert.tenantIsolation"
+        },
+        {
+          "kind": "happy_path",
+          "target": "widgets",
+          "operation": "select",
+          "passed": true,
+          "status": "passed",
+          "role": "control",
+          "detail": "owner saw the fixture widget row"
+        }
+      ]
+    }
+  ]
+}

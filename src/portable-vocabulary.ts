@@ -1,0 +1,6 @@
+export {
+  ACTION_CHANGE_KINDS,
+  TABLE_CHANGE_KINDS,
+  TENANT_ISOLATION_ACTION_HELPERS,
+  TENANT_ISOLATION_TABLE_HELPERS,
+} from "./shared/portable-vocabulary.mjs";

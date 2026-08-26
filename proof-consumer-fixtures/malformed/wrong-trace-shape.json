@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 2,
+  "proofId": "wrong-trace-shape",
+  "timestamp": "not-an-iso-timestamp",
+  "durationMs": -1,
+  "passed": true,
+  "steps": "not-an-array"
+}

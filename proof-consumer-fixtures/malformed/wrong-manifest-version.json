@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 99,
+  "missionId": "M-CONFORMANCE-MALFORMED",
+  "missionTitle": "Unsupported manifest version",
+  "createdAt": "2026-08-24T12:06:00.000Z",
+  "requirements": {
+    "capabilities_must_exist": [],
+    "schema_must_contain": [],
+    "trace_must_prove": []
+  }
+}

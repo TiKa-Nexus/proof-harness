@@ -1,0 +1,17 @@
+{
+  "id": "MUT-WIDGETS-LEAK",
+  "finding": "Widgets become readable across workspaces when RLS is disabled.",
+  "breaks": "tenant isolation for widgets SELECT",
+  "spec": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+  "claims": [
+    {
+      "kind": "tenant_isolation",
+      "target": "widgets",
+      "operation": "select"
+    }
+  ],
+  "detected": true,
+  "claimsTurnedRed": true,
+  "reasonMatched": true,
+  "traces": ["widgets-tenant-isolation.json"]
+}

@@ -1,0 +1,52 @@
+name: Publish next prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact prerelease version (for example 0.1.0-next.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Verify requested prerelease
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import manifest from "./package.json" with { type: "json" };
+
+          const requested = process.env.REQUESTED_VERSION;
+          if (!/^0\.1\.0-next\.\d+$/.test(requested ?? "")) {
+            throw new Error(`Expected an exact 0.1.0-next.N version, received ${requested}`);
+          }
+          if (manifest.version !== requested) {
+            throw new Error(`package.json is ${manifest.version}, not ${requested}`);
+          }
+          if (!manifest.license || manifest.license === "UNLICENSED" || /TODO/i.test(manifest.license)) {
+            throw new Error("Publishing is blocked until a human chooses the public license");
+          }
+          NODE
+      - name: Verify release candidate
+        run: pnpm check
+      - name: Publish with npm provenance
+        run: npm publish --provenance --tag next --access public

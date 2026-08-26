@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "missionId": "M-CONFORMANCE",
+  "provenance": {
+    "commit": "2222222222222222222222222222222222222222",
+    "branch": "feature/proof-consumer",
+    "dirty": false,
+    "repository": "example/proof-consumer",
+    "ci": true,
+    "runId": "1002",
+    "command": "node scripts/proof_verify.mjs",
+    "nodeVersion": "v24.6.0",
+    "platform": "linux-x64"
+  },
+  "passed": false,
+  "aggregatedAt": "2026-08-24T12:02:30.000Z",
+  "manifestSummary": {
+    "missionTitle": "Consumer conformance fixture",
+    "capabilities_must_exist": 0,
+    "schema_must_contain": 0,
+    "trace_must_prove": 1
+  },
+  "issues": [
+    {
+      "category": "trace_missing",
+      "message": "no passing role=\"primary\" assertion found with kind=\"tenant_isolation\" and target=\"widgets\"; found 1 matching assertion(s) but they FAILED: [widgets-tenant-isolation] outsider saw 1 of 1 widget rows; description: \"A member cannot read another workspace's widgets\"",
+      "context": {
+        "requirement": {
+          "kind": "tenant_isolation",
+          "target": "widgets",
+          "proofId": "widgets-tenant-isolation",
+          "description": "A member cannot read another workspace's widgets"
+        },
+        "candidateCount": 1
+      }
+    }
+  ],
+  "requirementEvidence": [
+    {
+      "kind": "tenant_isolation",
+      "target": "widgets",
+      "role": "primary",
+      "satisfied": false
+    }
+  ],
+  "proofs": [
+    {
+      "proofId": "widgets-tenant-isolation",
+      "missionId": "M-CONFORMANCE",
+      "specFile": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+      "specHash": "0123456789ab",
+      "passed": false,
+      "durationMs": 25,
+      "stepCount": 1,
+      "assertionCount": 2,
+      "assertionStatus": {
+        "passed": 1,
+        "failed": 1,
+        "incomplete": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "traces": [
+    {
+      "schemaVersion": 2,
+      "proofId": "widgets-tenant-isolation",
+      "missionId": "M-CONFORMANCE",
+      "specFile": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+      "specHash": "0123456789ab",
+      "commit": "2222222222222222222222222222222222222222",
+      "dirty": false,
+      "timestamp": "2026-08-24T12:02:00.000Z",
+      "durationMs": 25,
+      "passed": false,
+      "steps": [
+        {
+          "intent": "Prove workspace B cannot select workspace A's widgets",
+          "kind": "tenant_isolation",
+          "target": "widgets",
+          "observation": "The outsider unexpectedly saw the fixture row.",
+          "passed": false,
+          "actor": "member",
+          "workspaceId": "00000000-0000-0000-0000-000000000001",
+          "durationMs": 25,
+          "error": "[PROOF_FAIL] tenant_isolation: expected 0 rows; found 1; check widgets SELECT policy",
+          "assertions": [
+            {
+              "kind": "tenant_isolation",
+              "target": "widgets",
+              "operation": "select",
+              "passed": false,
+              "status": "failed",
+              "role": "primary",
+              "detail": "outsider saw 1 of 1 widget rows",
+              "emittedBy": "assert.tenantIsolation"
+            },
+            {
+              "kind": "happy_path",
+              "target": "widgets",
+              "operation": "select",
+              "passed": true,
+              "status": "passed",
+              "role": "control",
+              "detail": "owner saw the fixture widget row"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

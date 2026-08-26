@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "proofId": "widgets-tenant-isolation",
+  "missionId": "M-CONFORMANCE",
+  "specFile": "e2e/proofs/widgets-tenant-isolation.proof.ts",
+  "specHash": "0123456789ab",
+  "commit": "1111111111111111111111111111111111111111",
+  "dirty": true,
+  "mutation": {
+    "id": "MUT-WIDGETS-LEAK",
+    "planted": true
+  },
+  "timestamp": "2026-08-24T12:03:00.000Z",
+  "durationMs": 26,
+  "passed": false,
+  "steps": [
+    {
+      "intent": "Prove workspace B cannot select workspace A's widgets",
+      "kind": "tenant_isolation",
+      "target": "widgets",
+      "observation": "The planted RLS defect exposed the fixture row.",
+      "passed": false,
+      "actor": "member",
+      "workspaceId": "00000000-0000-0000-0000-000000000001",
+      "durationMs": 26,
+      "error": "[PROOF_FAIL] tenant_isolation: expected 0 rows; found 1 under MUT-WIDGETS-LEAK",
+      "assertions": [
+        {
+          "kind": "tenant_isolation",
+          "target": "widgets",
+          "operation": "select",
+          "passed": false,
+          "status": "failed",
+          "role": "primary",
+          "detail": "outsider saw 1 of 1 widget rows under the planted defect",
+          "emittedBy": "assert.tenantIsolation"
+        },
+        {
+          "kind": "happy_path",
+          "target": "widgets",
+          "operation": "select",
+          "passed": true,
+          "status": "passed",
+          "role": "control",
+          "detail": "owner still saw the fixture widget row"
+        }
+      ]
+    }
+  ]
+}

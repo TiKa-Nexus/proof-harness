@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "description": "Canonical conformance corpus for consumers of Proof evidence artifacts.",
+  "sharedInputs": {
+    "manifest": "inputs/mission.json",
+    "capabilities": "inputs/capabilities.json",
+    "schema": "inputs/schema.json"
+  },
+  "cases": [
+    {
+      "id": "baseline-passing",
+      "kind": "baseline_trace",
+      "path": "baseline/passing/widgets-tenant-isolation.json",
+      "expected": {
+        "classification": "trace",
+        "missionValidation": "pass"
+      }
+    },
+    {
+      "id": "baseline-failing",
+      "kind": "baseline_trace",
+      "path": "baseline/failing/widgets-tenant-isolation.json",
+      "expected": {
+        "classification": "trace",
+        "missionValidation": "fail",
+        "issueCategories": ["trace_missing"]
+      }
+    },
+    {
+      "id": "mission-aggregate-passing",
+      "kind": "mission_aggregate",
+      "path": "aggregates/M-CONFORMANCE-PASS.json",
+      "expected": {
+        "classification": "mission_aggregate",
+        "passed": true,
+        "mustNotBeIngestedAsTrace": true
+      }
+    },
+    {
+      "id": "mission-aggregate-failing",
+      "kind": "mission_aggregate",
+      "path": "aggregates/M-CONFORMANCE-FAIL.json",
+      "expected": {
+        "classification": "mission_aggregate",
+        "passed": false,
+        "issueCategories": ["trace_missing"],
+        "mustNotBeIngestedAsTrace": true
+      }
+    },
+    {
+      "id": "mutation-directory",
+      "kind": "mutation_directory",
+      "path": "mutations/MUT-WIDGETS-LEAK",
+      "expected": {
+        "classification": "mutation_directory",
+        "mutationId": "MUT-WIDGETS-LEAK",
+        "detected": true,
+        "mustRemainSeparateFromBaseline": true
+      }
+    },
+    {
+      "id": "duplicate-proof-id",
+      "kind": "duplicate_set",
+      "paths": [
+        "duplicates/first/widgets-tenant-isolation.json",
+        "duplicates/second/widgets-tenant-isolation.json"
+      ],
+      "expected": {
+        "classification": "reject",
+        "error": "duplicate_proof_id"
+      }
+    },
+    {
+      "id": "malformed-json",
+      "kind": "malformed",
+      "path": "malformed/invalid-trace.json.invalid",
+      "expected": {
+        "classification": "reject",
+        "error": "invalid_json"
+      }
+    },
+    {
+      "id": "malformed-trace-shape",
+      "kind": "malformed",
+      "path": "malformed/wrong-trace-shape.json",
+      "expected": {
+        "classification": "reject",
+        "error": "trace_shape"
+      }
+    },
+    {
+      "id": "malformed-manifest",
+      "kind": "malformed_manifest",
+      "path": "malformed/wrong-manifest-version.json",
+      "expected": {
+        "classification": "manifest",
+        "missionValidation": "fail",
+        "issueCategories": ["manifest_shape"]
+      }
+    }
+  ]
+}

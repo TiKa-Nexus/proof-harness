@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "missionId": "M-CONFORMANCE",
+  "missionTitle": "Consumer conformance fixture",
+  "productRepo": "example/proof-consumer",
+  "prBranch": "feature/proof-consumer",
+  "createdAt": "2026-08-24T12:00:00.000Z",
+  "requirements": {
+    "capabilities_must_exist": [],
+    "schema_must_contain": [],
+    "trace_must_prove": [
+      {
+        "kind": "tenant_isolation",
+        "target": "widgets",
+        "proofId": "widgets-tenant-isolation",
+        "description": "A member cannot read another workspace's widgets"
+      }
+    ]
+  }
+}

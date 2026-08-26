@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install frozen dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Lint
+        run: pnpm lint
+      - name: Unit tests
+        run: pnpm test
+      - name: Consumer conformance
+        run: pnpm conformance
+      - name: Package contents and clean consumer
+        run: pnpm pack:check
+      - name: Verify install tree and repository cleanliness
+        run: |
+          pnpm list --depth 0
+          pnpm install --frozen-lockfile --offline
+          git diff --exit-code
+          test -z "$(git status --porcelain)"

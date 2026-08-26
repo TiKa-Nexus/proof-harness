@@ -1,0 +1,97 @@
+{
+  "name": "@saasist/proof",
+  "version": "0.1.0-next.1",
+  "description": "Verification and conformance helpers for SaaSist proof traces, missions, fixtures, and Playwright probes.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "files": [
+    "dist",
+    "cli",
+    "README.md",
+    "COMPATIBILITY.md",
+    "PROOF_SDK_CONTRACT.md",
+    "proof-consumer-fixtures"
+  ],
+  "bin": {
+    "saasist-proof": "./cli/saasist-proof.mjs"
+  },
+  "sideEffects": false,
+  "exports": {
+    "./shared": {
+      "types": "./dist/shared.d.ts",
+      "import": "./dist/shared.js",
+      "default": "./dist/shared.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js",
+      "default": "./dist/node.js"
+    },
+    "./playwright": {
+      "types": "./dist/playwright.d.ts",
+      "import": "./dist/playwright.js",
+      "default": "./dist/playwright.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js",
+      "default": "./dist/server.js"
+    },
+    "./portable-vocabulary": {
+      "types": "./dist/portable-vocabulary.d.ts",
+      "import": "./dist/portable-vocabulary.js",
+      "default": "./dist/portable-vocabulary.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run src/__tests",
+    "conformance": "vitest run conformance",
+    "pack:check": "vitest run tests/package-content.test.ts",
+    "check": "pnpm build && pnpm typecheck && pnpm lint && pnpm test && pnpm conformance && pnpm pack:check",
+    "prepack": "pnpm build"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "peerDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@supabase/supabase-js": "^2.108.2",
+    "next": "^16.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@playwright/test": {
+      "optional": true
+    },
+    "@supabase/supabase-js": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "dependencies": {
+    "@next/env": "16.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "@playwright/test": "^1.57.0",
+    "@supabase/supabase-js": "^2.108.2",
+    "@types/node": "^24.13.3",
+    "eslint": "9.39.1",
+    "globals": "^15.15.0",
+    "next": "^16.3.0",
+    "tsup": "^8.5.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.49.0",
+    "vitest": "3.0.5"
+  },
+  "packageManager": "pnpm@11.9.0+sha512.bd682d5d03fe525ef7c9fd6780c6884d1e756ac4c9c9fe00c538782824310dcf90e3ddc4f53835f06dfaebd5085e41855e0bcbb3b60de2ac5bbab89e5036f03b"
+}
