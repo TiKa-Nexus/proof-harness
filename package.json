@@ -2,7 +2,7 @@
   "name": "@saasist/proof",
   "version": "0.1.0-next.1",
   "description": "Verification and conformance helpers for SaaSist proof traces, missions, fixtures, and Playwright probes.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
   "files": [
     "dist",

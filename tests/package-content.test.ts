@@ -69,6 +69,7 @@ describe("@saasist/proof package contents", () => {
     expect(files).toEqual(
       expect.arrayContaining([
         "package.json",
+        "LICENSE",
         "README.md",
         "COMPATIBILITY.md",
         "PROOF_SDK_CONTRACT.md",
@@ -91,6 +92,7 @@ describe("@saasist/proof package contents", () => {
       files.every(
         (file) =>
           file === "package.json" ||
+          file === "LICENSE" ||
           file === "README.md" ||
           file === "COMPATIBILITY.md" ||
           file === "PROOF_SDK_CONTRACT.md" ||

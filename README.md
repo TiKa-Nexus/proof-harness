@@ -34,10 +34,13 @@ Named seed actors (`"admin"` and `"member"`) read
 `SEED_MEMBER_EMAIL`/`SEED_MEMBER_PASSWORD` from the consumer environment. The
 package does not ship product seed credentials.
 
-## Publishing gate
+## License
 
-The package is currently `UNLICENSED`. Do not publish it until a human has
-chosen the public license and configured the `@saasist` npm scope, npm 2FA, and
-this repository as an npm trusted publisher. The manual prerelease workflow
-uses GitHub OIDC and npm provenance; it intentionally has no long-lived npm
-token.
+Copyright 2026 SaaSist / botstrap-workbench.
+
+Licensed under the [Apache License 2.0](./LICENSE).
+
+## Distribution status
+
+This repository remains private. No npm publication or template npm cutover has
+been authorized. The manual prerelease workflow must not be dispatched.
