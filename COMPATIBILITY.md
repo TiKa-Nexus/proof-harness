@@ -11,7 +11,7 @@ Consumers must pin an exact prerelease version, for example:
 ```json
 {
   "devDependencies": {
-    "proof-harness": "0.1.0-next.1"
+    "proof-harness": "0.1.0-next.2"
   }
 }
 ```
