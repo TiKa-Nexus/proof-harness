@@ -17,7 +17,7 @@ Public prereleases are published under the npm `next` tag. Pin an exact
 prerelease version while the API is stabilizing:
 
 ```sh
-pnpm add proof-harness@0.1.0-next.3
+pnpm add proof-harness@0.1.0-next.4
 ```
 
 The package exposes environment-specific entry points:
