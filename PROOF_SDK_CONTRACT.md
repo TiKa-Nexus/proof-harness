@@ -941,6 +941,18 @@ operation }` assertion has neither a matching mutation nor a valid entry in
   `.proof/mutation-policy.json`, pinned to the current spec hash and a passing
   positive control. A changed/deleted claim, changed spec, missing control, or
   newly added mutation makes the acceptance stale and fails inventory.
+- **A mutation that is not demonstrably live cannot judge a proof.** The
+  mutation runner never (re)applies migrations; it starts (or adopts) the
+  shared dev server before the first defect is planted, then reads each
+  mutation's subject back after apply and again after the proof. An apply that
+  left the subject unchanged fails as NOT PLANTED (a `REVOKE` no-op, or a
+  privilege still reachable via `PUBLIC` or an inherited role); a subject that
+  reverted mid-run — for example consumer tooling re-applying a wholesale
+  `REVOKE ALL; GRANT …` migration — fails as UN-PLANTED. Neither is reported
+  as a missed proof, because the proof never saw the defect. A mutation whose
+  apply intentionally leaves its subject untouched (it plants a side object
+  that `cleanup` removes) must declare `applyDoesNotChangeSubject: true` in
+  the catalog to opt out of the two subject comparisons explicitly.
 
 `pnpm proof:mutate` is the regression test for these guarantees: it re-opens known
 vulnerabilities in the local database one at a time and fails if the corresponding
