@@ -113,11 +113,14 @@ vi.mock("../playwright/trace", () => ({
 }));
 
 const supabaseClient = vi.fn();
+const loginAs = vi.fn();
+const logout = vi.fn(async () => undefined);
 
 vi.mock("../playwright/actAsUser", () => ({
   actAsUser: {
     supabaseClient,
-    loginAs: vi.fn(),
+    loginAs,
+    logout,
   },
 }));
 
@@ -132,6 +135,8 @@ beforeEach(() => {
   serviceRows = [];
   queryCalls.length = 0;
   supabaseClient.mockReset();
+  loginAs.mockReset();
+  logout.mockClear();
   deleteWorkspace.mockClear();
   deleteUser.mockClear();
 });
@@ -208,6 +213,24 @@ describe("assert.tenantIsolation fixture safety", () => {
     expect(recorded.some((assertion) => assertion.passed === true)).toBe(false);
     expect(deleteWorkspace).toHaveBeenCalledTimes(2);
     expect(deleteUser).toHaveBeenCalledTimes(2);
+  });
+
+  it("logs a supplied browser out before deleting disposable users", async () => {
+    const page = { marker: "browser page" };
+
+    await expect(
+      proofAssert.tenantIsolation({
+        table: "widgets",
+        fixture: pendingProofFixture("widgets", "schema is still pending"),
+        page: page as never,
+        tag: "browser-cleanup",
+      }),
+    ).rejects.toThrow(/fixture_factory_required/);
+
+    expect(logout).toHaveBeenCalledWith(page);
+    expect(logout.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteUser.mock.invocationCallOrder[0],
+    );
   });
 
   it("rejects a factory copied from another table before it inserts", async () => {

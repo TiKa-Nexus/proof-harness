@@ -23,13 +23,22 @@ function response(
 
 function pageWith(...responses: APIResponse[]): {
   page: Page;
+  clearCookies: ReturnType<typeof vi.fn>;
+  goto: ReturnType<typeof vi.fn>;
   post: ReturnType<typeof vi.fn>;
 } {
   const post = vi.fn();
+  const clearCookies = vi.fn(async () => undefined);
+  const goto = vi.fn(async () => null);
   for (const value of responses) post.mockResolvedValueOnce(value);
   return {
+    clearCookies,
+    goto,
     post,
     page: {
+      context: () => ({ clearCookies }),
+      goto,
+      isClosed: () => false,
       request: { post },
       url: () => "about:blank",
       reload: vi.fn(),
@@ -99,5 +108,19 @@ describe("proof login rate-limit diagnostics", () => {
       "[PROOF_FAIL] auth_signin:",
     );
     expect(post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("proof browser logout", () => {
+  it("stops the active document before clearing its shared cookie jar", async () => {
+    const { page, goto, clearCookies } = pageWith();
+
+    await actAsUser.logout(page);
+
+    expect(goto).toHaveBeenCalledWith("about:blank");
+    expect(clearCookies).toHaveBeenCalledOnce();
+    expect(goto.mock.invocationCallOrder[0]).toBeLessThan(
+      clearCookies.mock.invocationCallOrder[0],
+    );
   });
 });

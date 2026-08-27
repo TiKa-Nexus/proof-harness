@@ -1442,7 +1442,13 @@ const assertMethods = {
         // itself asserts the auth cookie roundtrip.
       }
     } finally {
-      await teardown(orgA, orgB, userA, userB);
+      try {
+        if (page) {
+          await actAsUser.logout(page);
+        }
+      } finally {
+        await teardown(orgA, orgB, userA, userB);
+      }
     }
   },
 

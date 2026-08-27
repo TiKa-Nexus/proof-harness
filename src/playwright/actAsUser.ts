@@ -30,6 +30,11 @@ import type { ActionResult } from "../shared/action-types";
 //        (e.g. "prove user B's DELETE against user A's row is filtered by
 //        RLS"). This is the primitive behind `assert.tenantIsolation`'s
 //        primary check.
+//
+// A browser logged in as a disposable proof user must call
+// `actAsUser.logout(page)` before deleting that user. It stops trailing page
+// requests first, then clears the shared browser/request cookie jar so no
+// validly-signed JWT can outlive the auth row named by its `sub` claim.
 // ---------------------------------------------------------------------------
 
 interface LoginOkResponse {
@@ -159,6 +164,20 @@ export const actAsUser = {
    */
   async loginAs(page: Page, email: string, password: string): Promise<void> {
     await callLoginRoute(page, { email, password });
+  },
+
+  /**
+   * Stop requests from the current document and clear the browser context's
+   * shared cookie jar. Call before deleting a disposable user that authenticated
+   * this page; otherwise router prefetches or streaming continuations can keep
+   * presenting that user's JWT after its auth row is gone.
+   */
+  async logout(page: Page): Promise<void> {
+    const context = page.context();
+    if (!page.isClosed()) {
+      await page.goto("about:blank");
+    }
+    await context.clearCookies();
   },
 
   /**
