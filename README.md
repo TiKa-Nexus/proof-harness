@@ -11,6 +11,15 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
+## Installation
+
+Public prereleases are published under the npm `next` tag. Pin an exact
+prerelease version while the API is stabilizing:
+
+```sh
+pnpm add proof-harness@0.1.0-next.1
+```
+
 The package exposes environment-specific entry points:
 
 - `proof-harness/shared` — portable types and vocabularies
@@ -44,7 +53,8 @@ Created and maintained by Till Kahlen at
 
 Licensed under the [Apache License 2.0](./LICENSE).
 
-## Distribution status
+## Release status
 
-This repository remains private. No npm publication or template npm cutover has
-been authorized. The manual prerelease workflow must not be dispatched.
+The package is released from this public repository with npm provenance.
+Prerelease consumers must pin an exact version rather than using `next`, `^`, or
+`~`; see [COMPATIBILITY.md](./COMPATIBILITY.md) for the compatibility policy.
