@@ -12,8 +12,13 @@ permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
 jobs:
   publish:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: npm
     steps:
@@ -47,4 +52,8 @@ jobs:
       - name: Verify release candidate
         run: pnpm check
       - name: Publish proof-harness with npm provenance
+        env:
+          # Required only to bootstrap the first release. Delete the environment
+          # secret after configuring npm Trusted Publishing; npm then uses OIDC.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --provenance --tag next --access public
