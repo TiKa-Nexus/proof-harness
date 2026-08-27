@@ -164,10 +164,13 @@ interface TenantIsolationBaseOptions {
     where: Record<string, unknown>;
   };
   /**
-   * Optional: pass a `page` to additionally log userB into a browser and
-   * assert the UI does not show orgA data. In v0.5 this step only signs in
-   * and reloads — callers can add their own page.locator checks afterwards
-   * by chaining additional `trace.step` calls.
+   * Optional: pass a `page` to verify userB's browser login roundtrip during
+   * the probe. The helper stops that document and clears its cookies before
+   * deleting the disposable users, so the page is intentionally logged out
+   * when this method returns.
+   *
+   * Product-specific UI assertions need their own fixture lifecycle; they
+   * cannot safely reuse credentials after this helper tears them down.
    */
   page?: Page;
   /**
@@ -1437,9 +1440,9 @@ const assertMethods = {
       // ---- Optional check: secondary UI assertion -----------------------
       if (page) {
         await actAsUser.loginAs(page, userB.email, userB.password);
-        // Intentionally no navigation — callers add context-specific
-        // `page.goto` + assertions in their own trace steps. The login
-        // itself asserts the auth cookie roundtrip.
+        // Intentionally no product-specific navigation. The login itself
+        // asserts the auth cookie roundtrip; finally logs out this page before
+        // teardown deletes the disposable auth users.
       }
     } finally {
       try {

@@ -44,6 +44,11 @@ Named seed actors (`"admin"` and `"member"`) read
 `SEED_MEMBER_EMAIL`/`SEED_MEMBER_PASSWORD` from the consumer environment. The
 package does not ship product seed credentials.
 
+Disposable users that authenticate a Playwright page must call
+`actAsUser.logout(page)` before their auth row is deleted.
+`assert.tenantIsolation({ page })` performs that browser cleanup automatically;
+the page is logged out when the helper returns.
+
 ## License
 
 Copyright 2026 The Nexus Collective GmbH.
