@@ -33,8 +33,9 @@ import type { ActionResult } from "../shared/action-types";
 //
 // A browser logged in as a disposable proof user must call
 // `actAsUser.logout(page)` before deleting that user. It stops trailing page
-// requests first, then clears the shared browser/request cookie jar so no
-// validly-signed JWT can outlive the auth row named by its `sub` claim.
+// requests first, clears the shared browser/request cookie jar, then allows
+// already-accepted server work to drain so no validly-signed JWT can outlive
+// the auth row named by its `sub` claim.
 // ---------------------------------------------------------------------------
 
 interface LoginOkResponse {
@@ -167,10 +168,11 @@ export const actAsUser = {
   },
 
   /**
-   * Stop requests from the current document and clear the browser context's
-   * shared cookie jar. Call before deleting a disposable user that authenticated
-   * this page; otherwise router prefetches or streaming continuations can keep
-   * presenting that user's JWT after its auth row is gone.
+   * Stop requests from the current document, clear the browser context's
+   * shared cookie jar, and allow already-accepted server work to drain. Call
+   * before deleting a disposable user that authenticated this page; otherwise
+   * router prefetches or streaming continuations can keep presenting that
+   * user's JWT after its auth row is gone.
    */
   async logout(page: Page): Promise<void> {
     const context = page.context();
@@ -178,6 +180,13 @@ export const actAsUser = {
       await page.goto("about:blank");
     }
     await context.clearCookies();
+    if (!page.isClosed()) {
+      // Navigation cancels browser work, but a request already accepted by
+      // the application server can finish after that cancellation. Keep the
+      // disposable auth row alive for one quiet-window before callers delete
+      // it, matching Playwright's network-idle settling interval.
+      await page.waitForTimeout(500);
+    }
   },
 
   /**

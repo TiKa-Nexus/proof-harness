@@ -26,15 +26,18 @@ function pageWith(...responses: APIResponse[]): {
   clearCookies: ReturnType<typeof vi.fn>;
   goto: ReturnType<typeof vi.fn>;
   post: ReturnType<typeof vi.fn>;
+  waitForTimeout: ReturnType<typeof vi.fn>;
 } {
   const post = vi.fn();
   const clearCookies = vi.fn(async () => undefined);
   const goto = vi.fn(async () => null);
+  const waitForTimeout = vi.fn(async () => undefined);
   for (const value of responses) post.mockResolvedValueOnce(value);
   return {
     clearCookies,
     goto,
     post,
+    waitForTimeout,
     page: {
       context: () => ({ clearCookies }),
       goto,
@@ -42,6 +45,7 @@ function pageWith(...responses: APIResponse[]): {
       request: { post },
       url: () => "about:blank",
       reload: vi.fn(),
+      waitForTimeout,
     } as unknown as Page,
   };
 }
@@ -113,14 +117,18 @@ describe("proof login rate-limit diagnostics", () => {
 
 describe("proof browser logout", () => {
   it("stops the active document before clearing its shared cookie jar", async () => {
-    const { page, goto, clearCookies } = pageWith();
+    const { page, goto, clearCookies, waitForTimeout } = pageWith();
 
     await actAsUser.logout(page);
 
     expect(goto).toHaveBeenCalledWith("about:blank");
     expect(clearCookies).toHaveBeenCalledOnce();
+    expect(waitForTimeout).toHaveBeenCalledWith(500);
     expect(goto.mock.invocationCallOrder[0]).toBeLessThan(
       clearCookies.mock.invocationCallOrder[0],
+    );
+    expect(clearCookies.mock.invocationCallOrder[0]).toBeLessThan(
+      waitForTimeout.mock.invocationCallOrder[0],
     );
   });
 });
