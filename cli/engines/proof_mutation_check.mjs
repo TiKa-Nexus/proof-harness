@@ -12,7 +12,10 @@
 //
 // Mutations are applied to the DATABASE, not the source tree: they are precise,
 // instant and reversible, where patching SQL files would require a full
-// migration cycle per mutation.
+// migration cycle per mutation. Migrations are never (re)applied by this
+// script; each planted defect is read back after apply and again after the
+// proof, so a plant that never took effect — or was externally undone
+// mid-run — fails as its own finding instead of being blamed on the proof.
 //
 // The mutation list is also the honest answer to "what does the baseline suite
 // actually detect?" — each entry names a finding, the hole it re-opens, and the
@@ -39,6 +42,10 @@ import {
   evaluateMutationClaimCoverage,
   mutationCoversClaim,
 } from "./proof_mutation_inventory.mjs";
+import {
+  assessPlantedSubject,
+  assessSubjectAfterProof,
+} from "./proof_plant_verification.mjs";
 import {
   applySourceMutation,
   restoreSourceMutation,
@@ -913,6 +920,15 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
   let devServer = null;
 
   try {
+    // Start (or adopt) the shared server BEFORE the first defect is planted.
+    // Consumer `pnpm dev` bootstrap hooks — migration re-application, seeding,
+    // schema reconciliation — must run against the healthy database, not
+    // inside the first mutation's window, where a wholesale re-GRANT would
+    // silently un-plant it.
+    if (selected.some((mutation) => !isSourceMutation(mutation))) {
+      devServer = await sharedDevServer();
+    }
+
     for (const m of selected) {
       console.log(`── ${m.id} ──────────────────────────────────────────`);
       console.log(`   planting: ${m.breaks}`);
@@ -933,6 +949,19 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
         applyMutation(container, m, snapshot);
         applied = true;
 
+        // A defect that is not demonstrably live proves nothing: running the
+        // proof anyway would blame the proof ("MISSED") for a plant that never
+        // happened. Read the subject back and refuse to continue on mismatch.
+        const plantedSnapshot = handler.snapshot(container, m.subject);
+        const plantProblem = assessPlantedSubject({
+          id: m.id,
+          description: handler.describe(m.subject),
+          before: snapshot,
+          afterApply: plantedSnapshot,
+          applyDoesNotChangeSubject: m.applyDoesNotChangeSubject === true,
+        });
+        if (plantProblem) throw new Error(plantProblem);
+
         if (isSourceMutation(m)) {
           if (devServer) {
             await devServer.stop();
@@ -946,6 +975,22 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
         const tracesBefore = snapshotTraceFiles();
         const { code, output } = await runProof(m.spec, m.id);
         const playwrightFailed = code !== 0;
+
+        // The defect must still be live now that the proof has finished. If
+        // the subject reverted mid-run (issue #7: a re-applied migration
+        // re-granting a revoked privilege), the proof's verdict — green or
+        // red — says nothing about the proof, and archiving it as MISSED
+        // would misdirect the operator toward a working proof.
+        const afterProofSnapshot = handler.snapshot(container, m.subject);
+        const liveProblem = assessSubjectAfterProof({
+          id: m.id,
+          description: handler.describe(m.subject),
+          before: snapshot,
+          afterApply: plantedSnapshot,
+          afterProof: afterProofSnapshot,
+          applyDoesNotChangeSubject: m.applyDoesNotChangeSubject === true,
+        });
+        if (liveProblem) throw new Error(liveProblem);
 
         // A proof can fail for the wrong reason (a crash, a timeout, a missing
         // browser). Where the reason matters — as with the deny-all mutation that
