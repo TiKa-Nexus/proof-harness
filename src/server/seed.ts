@@ -125,15 +125,24 @@ export const seed = {
    *
    * Bypasses RLS via the service-role client, so it works even when no user
    * is authenticated.
+   *
+   * The insert writes only `name` plus whatever `opts.columns` supplies: the
+   * harness never invents a column value it wasn't given, because tenancy
+   * shape is a consumer decision. A schema whose `workspaces` table requires
+   * more than `name` (a NOT NULL column without a default) states those
+   * values here — or via `workspaceColumns` on `assert.tenantIsolation`.
    */
-  async workspace(name: string): Promise<SeedWorkspace> {
+  async workspace(
+    name: string,
+    opts?: { columns?: Record<string, unknown> },
+  ): Promise<SeedWorkspace> {
     const sb = createProofServiceClient();
 
     const { data, error, status } = await sb
       .from("workspaces")
       .insert({
+        ...opts?.columns,
         name,
-        type: "team",
       })
       .select("id, name, owner_id")
       .single();

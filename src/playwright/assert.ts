@@ -178,6 +178,13 @@ interface TenantIsolationBaseOptions {
    * runs don't collide on error paths where teardown is skipped.
    */
   tag?: string;
+  /**
+   * Extra column values for the two seeded workspaces, forwarded to
+   * `seed.workspace`. The harness itself writes only `name`; a schema whose
+   * `workspaces` table requires more (a NOT NULL column without a default)
+   * states those values here.
+   */
+  workspaceColumns?: Record<string, unknown>;
 }
 
 function validateTenantIsolationCriterion(
@@ -1247,8 +1254,12 @@ const assertMethods = {
       opts.scopeColumn ?? (scope === "user" ? "user_id" : "workspace_id");
     validateTenantIsolationCriterion(table, scopeColumn, opts.criterion);
 
-    const orgA = await seed.workspace(`Proof OrgA ${tag}`);
-    const orgB = await seed.workspace(`Proof OrgB ${tag}`);
+    const orgA = await seed.workspace(`Proof OrgA ${tag}`, {
+      columns: opts.workspaceColumns,
+    });
+    const orgB = await seed.workspace(`Proof OrgB ${tag}`, {
+      columns: opts.workspaceColumns,
+    });
 
     const userA = await seed.user({
       email: `proof-a-${tag}@proof.test`,

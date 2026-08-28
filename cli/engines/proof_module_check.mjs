@@ -17,7 +17,12 @@
 //   module_missing        every core/extension module HAS a descriptor. The one
 //                         that matters most — without it, deleting a descriptor
 //                         makes every other check on that module vanish and CI
-//                         stays green.
+//                         stays green. A module may instead be accepted as
+//                         undescribed in .proof/module-policy.json with a
+//                         written reason (module_policy / module_policy_stale
+//                         guard that file), so an adopting consumer pays the
+//                         descriptor debt down module by module instead of
+//                         switching the check off.
 //   module_identity       id matches its directory; kind matches its root
 //   module_shape          the descriptor is actually the shape it claims
 //   module_question_shape ids unique and snake_case, options real and distinct,
@@ -58,6 +63,7 @@ process.on("warning", (warning) => {
 
 const MODULES_PATH = CONFIG.artifacts.modules;
 const ENV_EXAMPLE = CONFIG.repository.envExample;
+const MODULE_POLICY_PATH = CONFIG.policies.module;
 const DESCRIPTOR = "module.meta.ts";
 
 /** Roots that must carry a descriptor, and the kind each implies. */
@@ -194,21 +200,147 @@ function findCycles(modules) {
 }
 
 // ---------------------------------------------------------------------------
+// Module policy
+//
+// A consumer adopting the package with existing undescribed modules would
+// otherwise face an all-or-nothing gate: write every considered descriptor
+// before the check can pass once, or switch the check off — and a check that
+// is off finds nothing at all. `.proof/module-policy.json` turns the wall
+// into the same ratchet coverage uses: a module may be accepted as
+// undescribed WITH a written reason, the listing is the visible backlog, and
+// an entry that no longer applies fails as stale so paid-down debt leaves
+// the file.
+// ---------------------------------------------------------------------------
+
+function readModulePolicy(policyPath) {
+  const empty = { acceptedUndescribed: [] };
+  if (!fs.existsSync(policyPath)) return { policy: empty, problems: [] };
+  try {
+    const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+    if (policy.schemaVersion !== 1) {
+      return {
+        policy: empty,
+        problems: [
+          {
+            category: "module_policy",
+            message: `${policyPath} has unsupported schemaVersion ${policy.schemaVersion ?? "<missing>"}; expected 1.`,
+          },
+        ],
+      };
+    }
+    return { policy, problems: [] };
+  } catch (error) {
+    return {
+      policy: empty,
+      problems: [
+        {
+          category: "module_policy",
+          message: `cannot read ${policyPath}: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+    };
+  }
+}
+
+/**
+ * Judge every undescribed module against the accepted-undescribed policy.
+ *
+ * `missing` is `[{ root, name, kind }]` for required-root modules without a
+ * descriptor; `described` is the set of module ids that have one. Returns the
+ * problems to report and the acceptances that applied, so the caller can make
+ * the surviving debt visible without opening the file.
+ */
+export function evaluateModulePolicy({
+  missing,
+  described,
+  policy,
+  policyPath,
+  descriptor = DESCRIPTOR,
+}) {
+  const problems = [];
+  const entries = Array.isArray(policy?.acceptedUndescribed)
+    ? policy.acceptedUndescribed
+    : [];
+
+  const byModule = new Map();
+  for (const entry of entries) {
+    if (
+      typeof entry?.module !== "string" ||
+      typeof entry?.reason !== "string" ||
+      entry.reason.trim() === ""
+    ) {
+      problems.push({
+        category: "module_policy",
+        message: `${policyPath}: every acceptedUndescribed entry needs a "module" path and a non-empty "reason", found ${JSON.stringify(entry)}. An acceptance without a written reason is not a decision anybody can revisit.`,
+      });
+      continue;
+    }
+    if (byModule.has(entry.module)) {
+      problems.push({
+        category: "module_policy",
+        message: `${policyPath}: duplicate acceptedUndescribed entry for "${entry.module}".`,
+      });
+      continue;
+    }
+    byModule.set(entry.module, entry);
+  }
+
+  const accepted = [];
+  const usedModules = new Set();
+  for (const { root, name, kind } of missing) {
+    const key = `${root}/${name}`;
+    const acceptance = byModule.get(key);
+    if (acceptance) {
+      usedModules.add(key);
+      accepted.push(acceptance);
+      continue;
+    }
+    problems.push({
+      category: "module_missing",
+      message: `expected ${root}/${name}/${descriptor} to exist, found nothing. Without a descriptor this module is invisible to a planner, and every other check on it silently does not run.`,
+      suggestion:
+        `Add ${root}/${name}/${descriptor} declaring at least id, kind and purpose (kind: "${kind}"), ` +
+        `or record the module in ${policyPath} under acceptedUndescribed with a durable reason — the listing is the backlog.`,
+    });
+  }
+
+  const describedIds = new Set(described);
+  for (const [key, entry] of byModule) {
+    if (usedModules.has(key)) continue;
+    const basename = key.split("/").at(-1);
+    const why = describedIds.has(basename)
+      ? "the module now has a descriptor — delete the acceptance"
+      : "no required-root module directory matches that path — delete or fix the acceptance";
+    problems.push({
+      category: "module_policy_stale",
+      message: `${policyPath}: acceptance for "${entry.module}" no longer applies: ${why}.`,
+    });
+  }
+
+  return { problems, accepted };
+}
+
+// ---------------------------------------------------------------------------
 // Checks
 // ---------------------------------------------------------------------------
 
-function checkCoverage(modules, problems) {
+function checkCoverage(modules, policyResult, problems) {
   const described = new Set(modules.map((m) => m.id));
+  const missing = [];
   for (const { root, kind } of REQUIRED_ROOTS) {
     for (const name of directoriesIn(root)) {
       if (described.has(name)) continue;
-      problems.push({
-        category: "module_missing",
-        message: `expected ${root}/${name}/${DESCRIPTOR} to exist, found nothing. Without a descriptor this module is invisible to a planner, and every other check on it silently does not run.`,
-        suggestion: `Add ${root}/${name}/${DESCRIPTOR} declaring at least id, kind and purpose (kind: "${kind}").`,
-      });
+      missing.push({ root, name, kind });
     }
   }
+  const outcome = evaluateModulePolicy({
+    missing,
+    described,
+    policy: policyResult.policy,
+    policyPath: MODULE_POLICY_PATH,
+  });
+  problems.push(...policyResult.problems, ...outcome.problems);
+  return outcome.accepted;
 }
 
 function checkIdentity(mod, problems) {
@@ -429,7 +561,11 @@ async function main() {
   const seenIds = new Map();
   const problems = [];
 
-  checkCoverage(modules, problems);
+  const acceptedUndescribed = checkCoverage(
+    modules,
+    readModulePolicy(MODULE_POLICY_PATH),
+    problems,
+  );
   for (const mod of modules) {
     checkIdentity(mod, problems);
     checkShape(mod, MODULE_KINDS, problems);
@@ -442,7 +578,16 @@ async function main() {
 
   if (asJson) {
     console.log(
-      JSON.stringify({ modules: modules.length, problems, cycles }, null, 2),
+      JSON.stringify(
+        {
+          modules: modules.length,
+          acceptedUndescribed,
+          problems,
+          cycles,
+        },
+        null,
+        2,
+      ),
     );
   }
 
@@ -475,10 +620,20 @@ async function main() {
     );
   }
 
+  if (acceptedUndescribed.length > 0) {
+    console.log(
+      `[proof:modules:check] ${acceptedUndescribed.length} module(s) accepted as undescribed by ${MODULE_POLICY_PATH} — that listing is the backlog:`,
+    );
+    for (const entry of acceptedUndescribed) {
+      console.log(`  - ${entry.module}: ${entry.reason}`);
+    }
+  }
+
   console.log(
     `[proof:modules:check] ${modules.length} module descriptor(s) verified against source: ` +
       `${decisions} decision(s), ${inputs} input(s), ${defaults} default(s), ` +
-      `${artifact.unowned_tables?.length ?? 0} unowned table(s).`,
+      `${artifact.unowned_tables?.length ?? 0} unowned table(s), ` +
+      `${acceptedUndescribed.length} accepted undescribed module(s).`,
   );
 }
 
@@ -495,4 +650,4 @@ if (invokedDirectly) {
   });
 }
 
-export { main, seamProblem, findCycles };
+export { main, seamProblem, findCycles, readModulePolicy };

@@ -10,7 +10,11 @@
 
 export { proofGuard } from "./runtime-guard";
 export { seed } from "./seed";
-export { createProofServiceClient } from "./service-client";
+export {
+  allowProofServiceHosts,
+  createProofServiceClient,
+  proofServiceHostProblem,
+} from "./service-client";
 export {
   AUTH_RATE_LIMIT_MAX_ATTEMPTS,
   AUTH_RATE_LIMIT_MAX_DELAY_MS,

@@ -27,6 +27,9 @@ their product claims and trust inputs.
   pass.
 - Add conformance fixtures before changing a serialized contract; trace,
   mission, and health protocol versions are independent of the npm version.
+- The harness never invents a column value it wasn't given: anywhere it
+  writes to a consumer-owned table, values come from the caller or config,
+  or the column is omitted. Tenancy shape is a consumer decision.
 - Document every required consumer migration in `COMPATIBILITY.md`.
 
 ## Development
