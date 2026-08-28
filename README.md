@@ -17,7 +17,7 @@ Public prereleases are published under the npm `next` tag. Pin an exact
 prerelease version while the API is stabilizing:
 
 ```sh
-pnpm add proof-harness@0.1.0-next.4
+pnpm add proof-harness@0.1.0-next.5
 ```
 
 The package exposes environment-specific entry points:
@@ -31,6 +31,34 @@ The package exposes environment-specific entry points:
 See [PROOF_SDK_CONTRACT.md](./PROOF_SDK_CONTRACT.md) for the consumer contract
 and [COMPATIBILITY.md](./COMPATIBILITY.md) for protocol/schema compatibility
 and consumer pinning requirements.
+
+## Portability map
+
+The package has two layers; consumers should know which one they are leaning
+on:
+
+- **Assumes nothing about your schema** — trace recording and the assertion
+  vocabulary, mission validation, coverage and its ratchet, drift, mutation
+  testing, module checks, and the CLI. These read your generated schema and
+  config, or take what you give them.
+- **Assumes the conventional Supabase/workspace layout** — `seed.*` (a
+  `workspaces` table with a `name` column, a `workspace_members` join table,
+  and a `public.users` mirror maintained by a `handle_new_user` trigger) and
+  `assert.tenantIsolation`, which seeds through those helpers. The seed
+  helpers never invent column values: a schema that requires more than the
+  helpers are given states it via `seed.workspace(name, { columns })` or
+  `workspaceColumns` on `assert.tenantIsolation`.
+
+The `/api/proof/*` routes and the `NEXT_PUBLIC_SUPABASE_URL` /
+`SUPABASE_SECRET_KEY` environment names are documented protocol rather than
+template leakage.
+
+`createProofServiceClient` refuses every non-local Supabase target
+(`unsafe_database`): the proof suite deletes the auth users and workspaces it
+seeds, so a hosted project must never be reachable. A genuinely disposable
+non-local host — a docker-network hostname in CI — is allowed explicitly in
+code via `allowProofServiceHosts`; there is deliberately no environment
+override.
 
 The package also provides one `proof-harness` executable with `scan`, `parse`,
 `registry`, `build`, `verify`, `coverage`, `inventory`, `drift`, `modules`,

@@ -941,6 +941,28 @@ operation }` assertion has neither a matching mutation nor a valid entry in
   `.proof/mutation-policy.json`, pinned to the current spec hash and a passing
   positive control. A changed/deleted claim, changed spec, missing control, or
   newly added mutation makes the acceptance stale and fails inventory.
+- **A proof run cannot target a hosted database.** `createProofServiceClient`
+  parses `NEXT_PUBLIC_SUPABASE_URL` and hard-aborts as `unsafe_database` on
+  any hostname that is not local — matched on the parsed hostname, never by
+  substring, so `localhost.example.com` does not pass. The suite deletes the
+  auth users and workspaces it seeds; against a hosted project that failure
+  is silent and unrecoverable. There is deliberately no environment-variable
+  override: a genuinely disposable non-local host (a docker-network CI
+  hostname) is allowed in code via `allowProofServiceHosts`, where a reviewer
+  sees it. The mutation runner applies the same refusal to its psql target.
+- **The harness never invents a column value it wasn't given.** Anywhere the
+  package writes to a consumer-owned table, the values are caller-supplied or
+  the column is omitted — tenancy shape is a consumer decision.
+  `seed.workspace` writes only `name`; a schema that requires more states it
+  via `seed.workspace(name, { columns })` or `workspaceColumns` on
+  `assert.tenantIsolation`.
+- **Accepted descriptor gaps expire.** `proof:modules:check` accepts an
+  undescribed required-root module only through `.proof/module-policy.json`
+  (`schemaVersion: 1`, `acceptedUndescribed: [{ module, reason }]`), each
+  entry carrying a written reason, and prints the accepted backlog on every
+  run. An acceptance whose module gains a descriptor or no longer exists
+  fails as `module_policy_stale`, so paid-down debt leaves the file rather
+  than lingering as invisible permission.
 - **A mutation that is not demonstrably live cannot judge a proof.** The
   mutation runner never (re)applies migrations; it starts (or adopts) the
   shared dev server before the first defect is planted, then reads each
