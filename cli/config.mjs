@@ -19,6 +19,7 @@ const DEFAULT_CONFIG = Object.freeze({
     coverage: ".proof/coverage-policy.json",
     mutation: ".proof/mutation-policy.json",
     migration: ".proof/migration-policy.json",
+    module: ".proof/module-policy.json",
   },
   roots: {
     source: "app",
