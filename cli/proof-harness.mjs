@@ -15,8 +15,6 @@ const ENGINES = {
   verify: "proof_verify.mjs",
   coverage: "proof_coverage.mjs",
   drift: "proof_drift.mjs",
-  modules: "scan_module_meta.mjs",
-  "modules-check": "proof_module_check.mjs",
   mutate: "proof_mutation_check.mjs",
 };
 
@@ -24,8 +22,7 @@ function printHelp() {
   console.log(`Usage: proof-harness [--config <path>] <command> [flags]
 
 Commands:
-  scan, parse, registry, build, verify, coverage, inventory, drift,
-  modules, modules-check, mutate
+  scan, parse, registry, build, verify, coverage, inventory, drift, mutate
 
 Repository paths and the protected mutation catalog are read from
 proof.config.mjs. Missing config falls back to a conventional application layout.`);
@@ -74,7 +71,6 @@ export async function runCli(argv = process.argv.slice(2)) {
       ["scan", []],
       ["parse", []],
       ["registry", ["--check"]],
-      ["modules", []],
     ]) {
       const status = runEngine(step, stepArgs, config);
       if (status !== 0) return status;

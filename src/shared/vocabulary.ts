@@ -79,45 +79,6 @@ export const POLICY_COMMANDS = [
 
 export type PolicyCommand = (typeof POLICY_COMMANDS)[number];
 
-/**
- * Module kind — which of four very different things a module is.
- *
- * The field a planner reads first, because it decides cost and risk at once.
- * A module moving from `generated` to `extension` is work that will never be
- * paid for twice, and it should be visible in a diff.
- */
-export const MODULE_KINDS = [
-  /** The template ships it. Always present. */
-  "core",
-  /** Installable and already proven. Configured by answering its decisions. */
-  "extension",
-  /** Domain-specific code built for one product, under `__business-logic/`. */
-  "business",
-  /** Does not exist yet. An agent must build it against checks authored first. */
-  "generated",
-] as const;
-
-export type ModuleKind = (typeof MODULE_KINDS)[number];
-
-/**
- * How a buyer's answer reaches the code.
- *
- * The only technical field a planner needs, because it is what separates a
- * cheap dispatch from an expensive one. Most of this template is `code`: the
- * survey behind this vocabulary found exactly one real feature flag and about
- * twenty-five decisions that mean deleting routes and components.
- */
-export const APPLIED_BY = [
-  /** Set a value in a named constant. */
-  "config",
-  /** Rewrite prose — legal text, marketing copy. */
-  "content",
-  /** Add or remove files, components, routes, migrations. */
-  "code",
-] as const;
-
-export type AppliedBy = (typeof APPLIED_BY)[number];
-
 // ---------------------------------------------------------------------------
 // Type guards
 // ---------------------------------------------------------------------------
@@ -149,19 +110,5 @@ export function isPolicyCommand(value: unknown): value is PolicyCommand {
   return (
     typeof value === "string" &&
     (POLICY_COMMANDS as readonly string[]).includes(value)
-  );
-}
-
-export function isModuleKind(value: unknown): value is ModuleKind {
-  return (
-    typeof value === "string" &&
-    (MODULE_KINDS as readonly string[]).includes(value)
-  );
-}
-
-export function isAppliedBy(value: unknown): value is AppliedBy {
-  return (
-    typeof value === "string" &&
-    (APPLIED_BY as readonly string[]).includes(value)
   );
 }

@@ -11,7 +11,7 @@ Consumers must pin an exact prerelease version, for example:
 ```json
 {
   "devDependencies": {
-    "proof-harness": "0.1.0-next.5"
+    "proof-harness": "0.1.0-next.6"
   }
 }
 ```
@@ -26,6 +26,30 @@ package version. Consumers should reject unsupported artifact or protocol
 versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
+
+### 0.1.0-next.6
+
+**Removed: the module-descriptor system.** It served the consumer's planner
+(what a module is for, what a buyer must decide, where answers land) and never
+fed verification, so it is now consumer-owned. Gone from the package:
+
+- CLI commands `modules` and `modules-check` (and the `modules` step inside
+  `build`); the `.proof/module-policy.json` accept-list introduced in
+  `next.5` went with the checker.
+- `proof-harness/shared` exports `ModuleMeta`, `ModuleDecision`,
+  `ModuleInput`, `ModuleDefault`, `ModuleSeam`, `ScannedModule`,
+  `ModulesArtifact`, `MODULE_DESCRIPTOR_SCHEMA_VERSION`, `MODULE_KINDS`,
+  `APPLIED_BY`, `ModuleKind`, `AppliedBy`, `isModuleKind`, `isAppliedBy`.
+- The `proof.config.mjs` keys `artifacts.modules`, `policies.module`,
+  `roots.modules`, `roots.sharedModules`, and `moduleKinds` (now ignored if
+  supplied).
+
+Migration: consumers using the system vendor it from
+`proof-harness@0.1.0-next.5` (Apache-2.0) — `cli/engines/scan_module_meta.mjs`,
+`cli/engines/proof_module_check.mjs`, and `src/shared/module-types.ts` plus the
+two vocabularies above — and point their `module.meta.ts` type imports at the
+vendored copy. Consumers that never ran `proof:modules` are unaffected. Trace,
+mission, and health protocol versions are unchanged.
 
 ### 0.1.0-next.5
 

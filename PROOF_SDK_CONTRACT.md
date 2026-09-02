@@ -9,9 +9,6 @@ instead; this document is for anyone _consuming_ the template.
 
 > **"Manifest" in this document always means the _mission_ manifest**
 > (`.proof/current-mission.json`) — the file that pins what one PR must prove.
-> It is unrelated to a **module descriptor** (`module.meta.ts` →
-> `.proof/modules.json`), which describes what a module is for and what a buyer
-> must decide before using it. See §3.1 below.
 
 - **Version:** 1 (`schemaVersion` in every manifest and artifact)
 - **Stability:** The shapes in this document are the contract. Additive
@@ -534,7 +531,6 @@ Everything the template produces that the consumer consumes.
 | Output                      | Location                                                                       | Emitted by                                           | Cadence                                |
 | --------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------- | -------------------------------------- |
 | Capability map              | `.proof/capabilities.json` (gitignored)                                        | `pnpm proof:scan` (via `proof:build` in setup/CI)    | Every setup + CI run                   |
-| Module descriptors          | `.proof/modules.json` (gitignored)                                             | `pnpm proof:modules` (via `proof:build` in setup/CI) | Every setup + CI run                   |
 | Schema + RLS classification | `.proof/schema.json` (gitignored)                                              | `pnpm proof:parse` (via `proof:build` in setup/CI)   | Every setup + CI run                   |
 | Proof action allowlist      | `app/__shared/proof-runtime/action-registry.generated.ts`                      | `pnpm proof:registry`                                | When action requirements/probes change |
 | PR verification status      | GitHub check `Proof`                                                           | `pnpm proof:check` in `.github/workflows/ci.yml`     | Every PR push                          |
@@ -714,82 +710,16 @@ from another commit or whose `specFile` no longer exists with `stale_trace`.
 
 ---
 
-### 3.1 Module descriptors — what exists, and what must be decided
+### 3.1 Module descriptors — moved to the consumer
 
-`.proof/modules.json` answers a different question from everything else here.
-The trace artifacts say _"this claim was proved"_; this one says _"this is what
-exists, and this is what a buyer has to settle before it can be used"_. It is
-what a planning agent reads instead of the template's source, which is the point:
-without it the planner needs the codebase in its context, and that grows with
-every module we write.
-
-Regenerate it with `pnpm proof:modules`. Unlike `schema.json` it needs **no
-Docker, database, or migration aggregate** — it reads the filesystem and
-`capabilities.json`, and takes about a second.
-
-Each entry has a declared half and a derived half:
-
-```jsonc
-{
-  "schemaVersion": 1,
-  "modules": [
-    {
-      // Declared in app/__core/<module>/module.meta.ts
-      "id": "user-auth",
-      "kind": "core", // core | extension | business | generated
-      "purpose": "Signs people in and proves who they are — …",
-      "env": [],
-      "decisions": [
-        {
-          "id": "mfa_enforcement", // snake_case, unique across all modules
-          "ask": "Must people use a second factor to sign in?",
-          "because": "Stricter is safer but adds a step for everyone.",
-          "options": [{ "value": "optional", "means": "…" }],
-          "applied_by": "config", // config | content | code
-          "applies": ["app/__core/user-auth/src/config.ts#MFA_POLICY"],
-        },
-      ],
-      "inputs": [
-        /* values the buyer supplies rather than picks */
-      ],
-      "defaults": [
-        /* what we chose for them, each with a seam */
-      ],
-
-      // Derived from source — never written by hand
-      "path": "app/__core/user-auth",
-      "entities": [], // tables its own migrations create
-      "requires": ["config", "user-management"],
-      "uses_shared": ["ui", "db-supabase"],
-      "actions": [{ "name": "signin", "verb": null, "object": null }],
-      "proven": { "specs": 1, "mutations": 0 },
-    },
-  ],
-  // Tables no descriptor claims — today, the ones owned by __shared modules.
-  "unowned_tables": [
-    {
-      "table": "audit_logs",
-      "module": "audit-logging",
-      "path": "app/__shared/audit-logging",
-    },
-  ],
-}
-```
-
-**Two audiences, one file.** A planner reads `purpose`, `decisions`, `inputs`
-and `applied_by` — business language, no paths, roughly 80 tokens per decision.
-The agent that _applies_ an answer additionally reads `applies`, which names
-every place the answer lands, including files in other modules.
-
-**Every claim is checked.** `pnpm proof:modules:check` fails when a module has
-no descriptor, when an id does not match its directory, when a decision has
-fewer than two options or a duplicate id, when a declared environment variable
-is undocumented or an undeclared one is read, and — the one that matters most in
-practice — **when a seam no longer exists**. A moved file fails CI instead of
-quietly sending the next agent to the wrong place.
-
-Circular dependencies in the derived graph are **reported, not failed**, while a
-known inversion is being resolved.
+Until `0.1.0-next.5` the package also shipped a module-descriptor system
+(`module.meta.ts` → `.proof/modules.json`, plus the `modules` and
+`modules-check` commands). It served the consumer's *planner* — what a module
+is for, what a buyer must decide, where answers land — and never fed
+verification, so as of `0.1.0-next.6` it is consumer-owned and no longer part
+of this package. The last release carrying it is `proof-harness@0.1.0-next.5`
+(Apache-2.0), whose implementation is the reference for consumers vendoring
+the system into their own repository.
 
 ## 4. Failure contract
 
@@ -956,13 +886,6 @@ operation }` assertion has neither a matching mutation nor a valid entry in
   `seed.workspace` writes only `name`; a schema that requires more states it
   via `seed.workspace(name, { columns })` or `workspaceColumns` on
   `assert.tenantIsolation`.
-- **Accepted descriptor gaps expire.** `proof:modules:check` accepts an
-  undescribed required-root module only through `.proof/module-policy.json`
-  (`schemaVersion: 1`, `acceptedUndescribed: [{ module, reason }]`), each
-  entry carrying a written reason, and prints the accepted backlog on every
-  run. An acceptance whose module gains a descriptor or no longer exists
-  fails as `module_policy_stale`, so paid-down debt leaves the file rather
-  than lingering as invisible permission.
 - **A mutation that is not demonstrably live cannot judge a proof.** The
   mutation runner never (re)applies migrations; it starts (or adopts) the
   shared dev server before the first defect is planted, then reads each
