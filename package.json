@@ -1,6 +1,6 @@
 {
   "name": "proof-harness",
-  "version": "0.1.0-next.5",
+  "version": "0.1.0-next.6",
   "description": "Verification and conformance helpers for proof traces, missions, fixtures, and Playwright probes.",
   "license": "Apache-2.0",
   "author": {

@@ -17,7 +17,7 @@ Public prereleases are published under the npm `next` tag. Pin an exact
 prerelease version while the API is stabilizing:
 
 ```sh
-pnpm add proof-harness@0.1.0-next.5
+pnpm add proof-harness@0.1.0-next.6
 ```
 
 The package exposes environment-specific entry points:
@@ -39,8 +39,8 @@ on:
 
 - **Assumes nothing about your schema** — trace recording and the assertion
   vocabulary, mission validation, coverage and its ratchet, drift, mutation
-  testing, module checks, and the CLI. These read your generated schema and
-  config, or take what you give them.
+  testing, and the CLI. These read your generated schema and config, or take
+  what you give them.
 - **Assumes the conventional Supabase/workspace layout** — `seed.*` (a
   `workspaces` table with a `name` column, a `workspace_members` join table,
   and a `public.users` mirror maintained by a `handle_new_user` trigger) and
@@ -61,8 +61,8 @@ code via `allowProofServiceHosts`; there is deliberately no environment
 override.
 
 The package also provides one `proof-harness` executable with `scan`, `parse`,
-`registry`, `build`, `verify`, `coverage`, `inventory`, `drift`, `modules`,
-`modules-check`, and `mutate` subcommands. Commands read repository paths from
+`registry`, `build`, `verify`, `coverage`, `inventory`, `drift`, and `mutate`
+subcommands. Commands read repository paths from
 `proof.config.mjs`; without one they use a conventional application layout.
 Product migration aggregation and explicit mutation definitions remain
 repository-owned trust inputs rather than package defaults.

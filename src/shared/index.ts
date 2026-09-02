@@ -7,21 +7,15 @@ export {
   PROOF_VERBS,
   PROOF_KINDS,
   RLS_CLASSIFICATIONS,
-  MODULE_KINDS,
-  APPLIED_BY,
   isProofVerb,
   isProofKind,
   isRlsClassification,
-  isModuleKind,
-  isAppliedBy,
 } from "./vocabulary";
 
 export type {
   ProofVerb,
   ProofKind,
   RlsClassification,
-  ModuleKind,
-  AppliedBy,
 } from "./vocabulary";
 
 export type {
@@ -59,14 +53,3 @@ export type {
   ValidationResult,
   ValidationCategory,
 } from "./mission-types";
-
-export { MODULE_DESCRIPTOR_SCHEMA_VERSION } from "./module-types";
-export type {
-  ModuleMeta,
-  ModuleDecision,
-  ModuleInput,
-  ModuleDefault,
-  ModuleSeam,
-  ScannedModule,
-  ModulesArtifact,
-} from "./module-types";

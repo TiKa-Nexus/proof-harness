@@ -6,11 +6,15 @@ const DEFAULT_CONFIG = Object.freeze({
   artifacts: {
     capabilities: ".proof/capabilities.json",
     schema: ".proof/schema.json",
-    modules: ".proof/modules.json",
     traces: ".proof/traces",
     drift: ".proof/drift.json",
     mutations: ".proof/mutations",
   },
+  // The module-descriptor system (module.meta.ts → modules.json and its
+  // checker) moved to the consumer template in 0.1.0-next.6: it serves the
+  // planner, which is product, not verification. Its former config keys
+  // (artifacts.modules, policies.module, roots.modules, roots.sharedModules,
+  // moduleKinds) are ignored if a proof.config.mjs still supplies them.
   mission: {
     current: ".proof/current-mission.json",
     directory: ".proof/missions",
@@ -19,13 +23,10 @@ const DEFAULT_CONFIG = Object.freeze({
     coverage: ".proof/coverage-policy.json",
     mutation: ".proof/mutation-policy.json",
     migration: ".proof/migration-policy.json",
-    module: ".proof/module-policy.json",
   },
   roots: {
     source: "app",
     actions: ["app/__core", "app/__business-logic", "app/__extensions"],
-    modules: ["app/__core", "app/__extensions", "app/__business-logic"],
-    sharedModules: "app/__shared",
     proofs: "e2e/proofs",
     fixtures: "e2e/fixtures",
     migrations: "supabase/migrations",
@@ -41,13 +42,6 @@ const DEFAULT_CONFIG = Object.freeze({
     lockfile: "pnpm-lock.yaml",
     envExample: ".env.local.example",
     supabaseConfig: "supabase/config.toml",
-  },
-  moduleKinds: {
-    required: [
-      { root: "app/__core", kind: "core" },
-      { root: "app/__extensions", kind: "extension" },
-    ],
-    optional: [{ root: "app/__business-logic", kind: "business" }],
   },
   driftSources: ["app", "package.json"],
   mutationCatalog: null,
@@ -65,10 +59,6 @@ function mergeConfig(config = {}) {
     registryAliases: {
       ...DEFAULT_CONFIG.registryAliases,
       ...config.registryAliases,
-    },
-    moduleKinds: {
-      ...DEFAULT_CONFIG.moduleKinds,
-      ...config.moduleKinds,
     },
   };
 }
