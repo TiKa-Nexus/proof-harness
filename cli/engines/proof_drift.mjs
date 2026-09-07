@@ -162,8 +162,14 @@ function actionChanges(base, head) {
 
   const mutationKey = (m) => `${m.table}:${m.operation}`;
   const mutations = setDiff(
-    (base.serviceRoleMutations ?? []).map(mutationKey),
-    (head.serviceRoleMutations ?? []).map(mutationKey),
+    [
+      ...(base.serviceRoleMutations ?? []).map(mutationKey),
+      ...(base.serviceRoleAuthOperations ?? []).map((op) => `auth.admin:${op}`),
+    ],
+    [
+      ...(head.serviceRoleMutations ?? []).map(mutationKey),
+      ...(head.serviceRoleAuthOperations ?? []).map((op) => `auth.admin:${op}`),
+    ],
   );
   if (mutations.added.length > 0 || mutations.removed.length > 0) {
     facets.push("service_role_mutations_changed");

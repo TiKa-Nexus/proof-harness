@@ -228,6 +228,34 @@ describe("proof-harness package contents", () => {
         consumer,
       ),
     ).toContain("schema");
+    fs.writeFileSync(
+      path.join(actionsDir, "clients.ts"),
+      `
+      import {createSupabaseRLSClient as rls, createSupabaseServiceClient as service} from 'consumer-factories';
+      export const remove = createAction({functionName:'removeUser'});
+      const member = rls(); await member.from('users').update({name:'x'});
+      const admin = service(); await admin.auth.admin.deleteUser('id');
+    `,
+    );
+    expect(
+      run(
+        "node",
+        ["node_modules/proof-harness/cli/proof-harness.mjs", "scan"],
+        consumer,
+      ),
+    ).toContain("2 capabilities, 0 unclassified");
+    const scanned = JSON.parse(
+      fs.readFileSync(path.join(consumer, ".proof/capabilities.json"), "utf8"),
+    );
+    expect(
+      scanned.capabilities.find(
+        (c: { name: string }) => c.name === "removeUser",
+      ),
+    ).toMatchObject({
+      serviceRoleMutations: [],
+      serviceRoleAuthOperations: ["deleteUser"],
+    });
+
     // Exercise the provider through the installed CLI, not source-tree imports.
     fs.writeFileSync(
       path.join(consumer, "proof.config.mjs"),

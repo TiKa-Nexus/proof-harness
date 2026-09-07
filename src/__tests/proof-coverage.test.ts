@@ -650,3 +650,60 @@ describe("proof:coverage --strict", () => {
     expect(runStrict().code).toBe(1);
   });
 });
+
+it("requires denial and allowed-path control for Auth admin actions without workspace inputs", () => {
+  const capabilities = JSON.parse(
+    fs.readFileSync(
+      path.resolve(
+        import.meta.dirname,
+        "../../proof-consumer-fixtures/capabilities/auth-admin.json",
+      ),
+      "utf8",
+    ),
+  ).capabilities;
+  fixture({ capabilities });
+  const result = runStrict();
+  expect(result.code).toBe(1);
+  expect(result.output).toContain("users:removeUser");
+});
+
+it.each([false, true])(
+  "Auth admin coverage requires the allowed control alongside a denial: %s",
+  (control) => {
+    const capabilities = JSON.parse(
+      fs.readFileSync(
+        path.resolve(
+          import.meta.dirname,
+          "../../proof-consumer-fixtures/capabilities/auth-admin.json",
+        ),
+        "utf8",
+      ),
+    ).capabilities;
+    const assertions: unknown[] = [
+      {
+        kind: "tenant_isolation",
+        target: "widgets",
+        passed: true,
+        role: "primary",
+        emittedBy: "assert.tenantIsolation",
+      },
+      {
+        kind: "authorization",
+        target: "users:removeUser",
+        passed: true,
+        role: "primary",
+        emittedBy: "assert.authorization",
+      },
+    ];
+    if (control)
+      assertions.push({
+        kind: "happy_path",
+        target: "users:removeUser",
+        passed: true,
+        role: "control",
+      });
+    fixture({ capabilities, assertions });
+    const result = runStrict();
+    expect(result.code, result.output).toBe(control ? 0 : 1);
+  },
+);

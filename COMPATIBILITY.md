@@ -27,6 +27,31 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
+### Unreleased: direct RLS clients and Auth administration (#18)
+
+The scanner recognizes immutable local bindings returned by
+`createSupabaseRLSClient`, including named-import aliases and awaited calls.
+Their table writes are assessed as RLS writes, never recorded as service-role
+writes. Binding identity is local to its scope: shadowed identifiers,
+reassignment, escaped clients/builders, and unresolved privilege still fail.
+This remains convention-based discovery of the named consumer factories, not
+verification of their implementation or arbitrary wrapper/dataflow analysis.
+
+Direct `serviceClient.auth.admin.deleteUser(...)` is recorded in the additive
+capability field `serviceRoleAuthOperations: ["deleteUser"]`, separate from
+`serviceRoleMutations`. This does not pretend the Auth API is a SQL DELETE
+(and does not infer whether its optional soft-delete argument is true).
+Other administrative methods, dynamic method names, detached calls, and
+unresolved administrative privilege remain unassessed.
+
+Regenerate capabilities. Changes to Auth operations participate in drift under
+`service_role_mutations_changed`. Coverage requires a package-origin denial
+assertion and an allowed-path control for a user-facing Auth-admin action,
+even when it has no workspace input or voluntary invariant declaration.
+Existing explicit action-gap policy handling remains unchanged; a recognized
+operation alone is not passing authorization evidence. Trace, mission and
+health protocol versions are unchanged; capability schema remains additive v1.
+
 ### Unreleased: catalog providers and rollback INSERT controls (#19, #20)
 
 These changes are not in the published `0.1.0-next.7`. They are opt-in; the

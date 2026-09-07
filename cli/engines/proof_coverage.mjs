@@ -352,6 +352,8 @@ function buildReport() {
   // user_scoped by their owner policy, but a service-role action accepting an
   // arbitrary workspaceId still needs an action-layer cross-tenant probe.
   //
+  // Auth administrative operations require this boundary independently of
+  // workspace inputs because their target may be another user.
   // A denial alone is not enough. A broken/unregistered action also refuses
   // everyone, so the same action target needs a passing allowed-path control.
   const denialKinds = new Set(["authorization", "tenant_isolation"]);
@@ -366,14 +368,17 @@ function buildReport() {
     `${a.module}:${a.name}`.localeCompare(`${b.module}:${b.name}`),
   )) {
     if (
-      capability.acceptsWorkspaceId !== true ||
+      (capability.acceptsWorkspaceId !== true &&
+        !(capability.serviceRoleAuthOperations ?? []).length) ||
       capability.internalOnly === true
     ) {
       continue;
     }
 
     const workspaceMutations = capability.serviceRoleMutations ?? [];
-    if (workspaceMutations.length === 0) continue;
+    const authOperations = capability.serviceRoleAuthOperations ?? [];
+    if (workspaceMutations.length === 0 && authOperations.length === 0)
+      continue;
 
     const action = `${capability.module}:${capability.name}`;
     const denialEvidence = assertions.filter(
@@ -404,6 +409,7 @@ function buildReport() {
       action,
       tables: [...new Set(workspaceMutations.map((m) => m.table))].sort(),
       mutations: workspaceMutations,
+      authOperations,
       denial: denialProven ? "proven" : "gap",
       control: controlProven ? "proven" : "gap",
       status: proven ? "proven" : acceptance ? "accepted_gap" : "gap",
@@ -593,13 +599,20 @@ function printReport(report) {
     );
     heading(
       "SERVICE-ROLE ACTION BOUNDARIES",
-      "Derived from caller-controlled workspaceId inputs plus service-role mutations. Each action needs both an unauthorized/cross-tenant refusal and an allowed-path control; withProof metadata is not consulted.",
+      "Derived from workspace-targeted service-role writes or privileged Auth operations. Each action needs both an unauthorized/cross-tenant refusal and an allowed-path control; withProof metadata is not consulted.",
     );
     console.log("");
     printTable(
       [
         { header: "action", get: (r) => r.action },
-        { header: "tables", get: (r) => r.tables.join(",") },
+        {
+          header: "effects",
+          get: (r) =>
+            [
+              ...r.tables,
+              ...r.authOperations.map((op) => `auth.admin.${op}`),
+            ].join(","),
+        },
         { header: "denial", get: (r) => r.denial },
         { header: "control", get: (r) => r.control },
         { header: "status", get: (r) => r.status },
@@ -767,7 +780,7 @@ gap or an unproven action requirement.`);
   if (serviceRoleActionGaps.length > 0) {
     problems.push({
       line:
-        `[PROOF_FAIL] service_role_action_gap: ${serviceRoleActionGaps.length} workspace-targeted service-role action(s) lack mandatory action evidence: ` +
+        `[PROOF_FAIL] service_role_action_gap: ${serviceRoleActionGaps.length} privileged action(s) lack mandatory action evidence: ` +
         serviceRoleActionGaps
           .map((g) => {
             const missing = [

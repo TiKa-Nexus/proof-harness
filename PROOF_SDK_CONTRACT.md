@@ -1235,3 +1235,14 @@ classifies policies, binds source identity, and compares both trees. A rollback
 INSERT control is package-executed and can only record passing control evidence
 after its insert, deferred checks, rollback, and absence reread succeed. The
 original authenticated request remains the primary authorization assertion.
+
+
+## Direct Auth administration (unreleased)
+
+Capability schema v1 adds optional `serviceRoleAuthOperations`, currently a
+closed list containing only `"deleteUser"`. It describes direct service-client
+Auth API calls separately from `serviceRoleMutations` (SQL table writes).
+Such user-facing actions require denial and allowed-control evidence in
+coverage even without a workspace input. Changes use the existing
+`service_role_mutations_changed` drift facet. See `COMPATIBILITY.md` for
+supported factory/binding shapes and required consumer regeneration.
