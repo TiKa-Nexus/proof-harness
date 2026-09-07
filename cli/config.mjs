@@ -43,6 +43,9 @@ const DEFAULT_CONFIG = Object.freeze({
     envExample: ".env.local.example",
     supabaseConfig: "supabase/config.toml",
   },
+  // Optional consumer-owned argv used to prepare generated migration inputs
+  // in both the working tree and the archived base before parsing.
+  driftPrepare: null,
   driftSources: ["app", "package.json"],
   mutationCatalog: null,
 });
@@ -105,3 +108,29 @@ export async function loadMutationCatalog(config) {
 }
 
 export { DEFAULT_CONFIG };
+
+/** Derived outputs are excluded from the source identity, never trust inputs. */
+export function evidenceExclusions(config) {
+  return [
+    ...Object.values(config.artifacts),
+    `${path.dirname(config.artifacts.mutations)}/mutation-recovery.json`,
+  ].map((p) => path.resolve(config.rootDir, p));
+}
+
+/** Reject a trace/output directory that resolves to the repository or its parent. */
+export function assertArtifactDirectory(directory, rootDir) {
+  function canonical(file) {
+    const absolute = path.resolve(file);
+    if (fs.existsSync(absolute)) return fs.realpathSync(absolute);
+    const parent = path.dirname(absolute);
+    return path.join(canonical(parent), path.basename(absolute));
+  }
+  const output = canonical(directory);
+  const root = canonical(rootDir);
+  const relative = path.relative(output, root);
+  if (!relative || (!relative.startsWith("..") && !path.isAbsolute(relative)))
+    throw new Error(
+      "[PROOF_FAIL] unsafe_artifact_directory: output must not be the repository or an ancestor",
+    );
+  return output;
+}

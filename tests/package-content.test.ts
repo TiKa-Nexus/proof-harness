@@ -54,7 +54,7 @@ describe("proof-harness package contents", () => {
     ) as Record<string, unknown>;
     expect(manifest).toMatchObject({
       name: "proof-harness",
-      version: "0.1.0-next.6",
+      version: "0.1.0-next.7",
       license: "Apache-2.0",
       repository: {
         type: "git",
@@ -84,8 +84,8 @@ describe("proof-harness package contents", () => {
 
     expect(packed).toMatchObject({
       name: "proof-harness",
-      version: "0.1.0-next.6",
-      filename: "proof-harness-0.1.0-next.6.tgz",
+      version: "0.1.0-next.7",
+      filename: "proof-harness-0.1.0-next.7.tgz",
     });
     expect(files).toEqual(
       expect.arrayContaining([
@@ -132,7 +132,10 @@ describe("proof-harness package contents", () => {
       "current-mission",
     ];
     for (const marker of forbidden) {
-      expect(files.some((file) => file.includes(marker)), marker).toBe(false);
+      expect(
+        files.some((file) => file.includes(marker)),
+        marker,
+      ).toBe(false);
     }
 
     const consumer = fs.mkdtempSync(
@@ -155,6 +158,7 @@ describe("proof-harness package contents", () => {
         "react@19.2.1",
         "react-dom@19.2.1",
         "@supabase/supabase-js@2.108.2",
+        "@playwright/test@1.57.0",
       ],
       consumer,
     );
@@ -178,6 +182,8 @@ describe("proof-harness package contents", () => {
           'import * as shared from "proof-harness/shared";',
           'import * as nodeApi from "proof-harness/node";',
           'import * as serverApi from "proof-harness/server";',
+          'import * as playwrightApi from "proof-harness/playwright";',
+          'if (typeof playwrightApi.trace.proof !== "function") throw new Error("trace export missing");',
           'import * as vocabulary from "proof-harness/portable-vocabulary";',
           'if (!shared.TRACE_ARTIFACT_SCHEMA_VERSION) throw new Error("shared export missing");',
           'if (typeof nodeApi.validateMission !== "function") throw new Error("node export missing");',
@@ -197,5 +203,29 @@ describe("proof-harness package contents", () => {
       consumer,
     );
     expect(binOutput).toContain("Usage: proof-harness");
+    fs.writeFileSync(
+      path.join(consumer, "proof.config.mjs"),
+      'export default {roots:{actions:["modules"],migrations:"sql"}};',
+    );
+    const actionsDir = path.join(consumer, "modules/widgets/src/actions");
+    fs.mkdirSync(actionsDir, { recursive: true });
+    fs.mkdirSync(path.join(consumer, "sql"));
+    fs.writeFileSync(
+      path.join(actionsDir, "create.ts"),
+      'export const create = createAction({functionName:"createWidget"});',
+    );
+    const scan = run(
+      "node",
+      ["node_modules/proof-harness/cli/proof-harness.mjs", "scan"],
+      consumer,
+    );
+    expect(scan).toContain("1 capabilities, 0 unclassified");
+    expect(
+      run(
+        "node",
+        ["node_modules/proof-harness/cli/proof-harness.mjs", "parse"],
+        consumer,
+      ),
+    ).toContain("schema");
   }, 120_000);
 });

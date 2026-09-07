@@ -24,20 +24,13 @@
 // no timestamps) so `git diff --exit-code` is a meaningful freshness gate
 // in CI; it only fires when the inputs actually changed.
 //
-// This is the v1 scanner: regex + glob, zero AST. It intentionally ignores:
-//   - computed function names (template literals, variable references)
-//   - `withProof` declarations outside the same file as `createAction`
-//   - chained middleware where the literal spans multiple lines awkwardly
-// Any file with `createAction(` that the regex can't parse lands in
-// `unclassified[]` with a reason so the author sees it instead of a
-// silently-missing capability.
-//
-// v2 will swap this for a ts-morph / TypeScript compiler API scanner that
-// resolves variables, follows re-exports, and handles dynamic shapes. The
-// output shape here is the stable contract — v2 just widens coverage.
+// TypeScript syntax analysis handles import aliases and multiple actions.
+// Unsupported indirection is reported as unclassified and blocks assessment.
+// This remains template-shaped discovery, not whole-program dataflow analysis.
 // ---------------------------------------------------------------------------
 
 import fs from "node:fs";
+import ts from "typescript";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -139,221 +132,333 @@ function readTableConstants() {
   return values;
 }
 
-// `[\s\S]` rather than `.` with /s flag: tolerates any content (nested
-// objects, comments) until we hit `functionName`. The non-greedy `*?`
-// keeps the match tight.
-const CREATE_ACTION_RE = /createAction\s*\(\s*\{([\s\S]*?)\}\s*\)/;
-const FUNCTION_NAME_RE = /\bfunctionName\s*:\s*["']([^"']+)["']/;
-const WITH_PROOF_RE = /\bwithProof\s*\(\s*\{([\s\S]*?)\}\s*\)/;
-const VERB_RE = /\bverb\s*:\s*["']([^"']+)["']/;
-const OBJECT_RE = /\bobject\s*:\s*["']([^"']+)["']/;
-const INVARIANTS_RE = /\binvariants\s*:\s*\[([\s\S]*?)\]/;
-const STRING_LITERALS_RE = /["']([^"'\\]+)["']/g;
-const SERVICE_CLIENT_ASSIGNMENT_RE =
-  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*createSupabaseServiceClient\s*\(\s*\)/g;
-const EXPORTED_FUNCTION_RE =
-  /\bexport\s+(?:default\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(/;
-
-// Strip `// line` comments and `/* block */` comments before regex matching
-// so commented-out examples in JSDoc don't produce false positives. This is
-// naive (doesn't handle strings containing `//`) but sufficient for the
-// repo's code style. False positives fail loudly when the capabilities.json
-// diff lights up — that's an acceptable signal.
-function stripComments(src) {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/^\s*\/\/.*$/gm, "")
-    .replace(/[ \t]+\/\/.*$/gm, "");
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
-
-function extractStringArrayLiterals(body) {
-  if (!body) return [];
-  const out = [];
-  for (const m of body.matchAll(STRING_LITERALS_RE)) out.push(m[1]);
-  return out;
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function resolveTableExpression(expression, tableConstants) {
-  const literal = expression.match(/^["']([^"']+)["']$/);
-  if (literal) return literal[1];
-  return tableConstants.get(expression) ?? null;
-}
-
-function extractServiceRoleMutations(src, tableConstants) {
-  const clientNames = [...src.matchAll(SERVICE_CLIENT_ASSIGNMENT_RE)].map(
-    (match) => match[1],
+function property(node, name) {
+  if (!node || !ts.isObjectLiteralExpression(node)) return undefined;
+  const p = node.properties.find(
+    (p) =>
+      ts.isPropertyAssignment(p) &&
+      p.name.getText().replace(/["']/g, "") === name,
   );
-  const mutations = new Map();
-
-  for (const clientName of new Set(clientNames)) {
-    const escapedClient = escapeRegExp(clientName);
-    // Stop before the next `.from()` call on this client so a SELECT followed
-    // by a later UPDATE is not misclassified as one mutating query chain.
-    const mutationRe = new RegExp(
-      `\\b${escapedClient}\\s*\\.\\s*from\\s*\\(\\s*(` +
-        `["'][^"']+["']|[A-Za-z_$][\\w$]*` +
-        `)\\s*\\)(?:(?!\\b${escapedClient}\\s*\\.\\s*from\\s*\\()[\\s\\S])*?` +
-        `\\.\\s*(insert|upsert|update|delete)\\s*\\(`,
-      "g",
-    );
-
-    for (const match of src.matchAll(mutationRe)) {
-      const table = resolveTableExpression(match[1], tableConstants);
-      if (!table) continue;
-      const operation = match[2];
-      mutations.set(`${table}:${operation}`, { table, operation });
+  return p && ts.isPropertyAssignment(p) ? p.initializer : undefined;
+}
+function literal(node) {
+  return node &&
+    (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+    ? node.text
+    : undefined;
+}
+function unwrap(node) {
+  while (
+    node &&
+    (ts.isAwaitExpression(node) || ts.isParenthesizedExpression(node))
+  )
+    node = node.expression;
+  return node;
+}
+function visit(node, fn) {
+  fn(node);
+  ts.forEachChild(node, (child) => visit(child, fn));
+}
+function exportedName(call, source) {
+  for (let parent = call.parent; parent; parent = parent.parent) {
+    if (
+      ts.isFunctionDeclaration(parent) &&
+      parent.name &&
+      parent.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+    )
+      return parent.name.text;
+    if (
+      ts.isVariableDeclaration(parent) &&
+      ts.isIdentifier(parent.name) &&
+      parent.parent.parent.modifiers?.some(
+        (m) => m.kind === ts.SyntaxKind.ExportKeyword,
+      )
+    )
+      return parent.name.text;
+  }
+  const exports = source.statements.filter(
+    (n) =>
+      ts.isFunctionDeclaration(n) &&
+      n.name &&
+      n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword),
+  );
+  return exports.length === 1 ? exports[0].name.text : null;
+}
+function scanFile(file, constants) {
+  const source = ts.createSourceFile(
+    file,
+    fs.readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const actionNames = new Set(["createAction"]);
+  const serviceFactories = new Set(["createSupabaseServiceClient"]);
+  for (const statement of source.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const item of bindings.elements) {
+      const imported = (item.propertyName ?? item.name).text;
+      if (imported === "createAction") actionNames.add(item.name.text);
+      if (imported === "createSupabaseServiceClient")
+        serviceFactories.add(item.name.text);
     }
   }
-
-  return [...mutations.values()].sort((a, b) =>
-    `${a.table}:${a.operation}`.localeCompare(`${b.table}:${b.operation}`),
-  );
-}
-
-function scanFile(file, tableConstants) {
-  const raw = fs.readFileSync(file, "utf8");
-  const src = stripComments(raw);
-  const relFile = path.relative(process.cwd(), file);
-
-  // Only process files that actually invoke createAction at runtime. The
-  // middleware/utils files that *define* createAction are excluded by the
-  // action-dir glob, but this is an extra guard.
-  if (!/\bcreateAction\s*\(/.test(src)) return null;
-
-  const caMatch = src.match(CREATE_ACTION_RE);
-  if (!caMatch) {
-    return {
-      kind: "unclassified",
-      file: relFile,
-      reason:
-        "createAction call present but the `createAction({ ... })` literal could not be matched by the v1 regex; check for multi-line or computed syntax",
-    };
-  }
-
-  const fnMatch = caMatch[1].match(FUNCTION_NAME_RE);
-  if (!fnMatch) {
-    return {
-      kind: "unclassified",
-      file: relFile,
-      reason:
-        "createAction({ ... }) present but `functionName` is missing or computed; scanner only reads string literals in v1",
-    };
-  }
-
-  const name = fnMatch[1];
-  const exportName = src.match(EXPORTED_FUNCTION_RE)?.[1] ?? null;
-  const moduleName = extractModule(file);
-  if (!moduleName) {
-    return {
-      kind: "unclassified",
-      file: relFile,
-      reason:
-        "could not determine module from path (expected `app/__<kind>/<module>/src/actions/...`)",
-    };
-  }
-
-  let verb = null;
-  let object = null;
-  let invariants = [];
-  // Require a caller-controlled workspaceId signal. Looking only before
-  // createAction misses the template's common `formData.workspaceId` shape,
-  // while searching for any `workspaceId` would misclassify acceptInvitation,
-  // which derives the workspace from a trusted token after validation.
-  const acceptsWorkspaceId =
-    /\bworkspace_?id\b/i.test(src.slice(0, caMatch.index)) ||
-    /\b(?:inputParams|formData)\s*\.\s*workspaceId\b/.test(src);
-  const internalOnly =
-    file.endsWith("_BOT.ts") ||
-    /^\s*import\s+["']server-only["']\s*;?/m.test(src);
-  const usesDirectUpdateTag =
-    /\bimport\s*\{[^}]*\bupdateTag\b[^}]*\}\s*from\s*["']next\/cache["']/.test(
-      src,
-    );
-  const serviceRoleMutations = extractServiceRoleMutations(src, tableConstants);
-  const middleware = {
-    auth: /\bwithAuth\s*\(/.test(src),
-    tenantIsolation: /\bwithTenantIsolation\s*\(/.test(src),
-    rbac: /\bwithRBAC\s*\(/.test(src),
-  };
-
-  const pfMatch = src.match(WITH_PROOF_RE);
-  if (pfMatch) {
-    const body = pfMatch[1];
-    verb = body.match(VERB_RE)?.[1] ?? null;
-    object = body.match(OBJECT_RE)?.[1] ?? null;
-    const invBody = body.match(INVARIANTS_RE)?.[1];
-    invariants = extractStringArrayLiterals(invBody);
-  }
-
-  return {
-    kind: "capability",
-    capability: {
-      name,
-      module: moduleName,
-      exportName,
-      verb,
-      object,
-      invariants,
-      acceptsWorkspaceId,
-      internalOnly,
-      usesDirectUpdateTag,
-      serviceRoleMutations,
-      middleware,
-      file: relFile.split(path.sep).join("/"),
-    },
-  };
-}
-
-export function main() {
-  const files = listActionFiles();
-  const tableConstants = readTableConstants();
-  const capabilities = [];
-  const unclassified = [];
-
-  for (const file of files) {
-    const result = scanFile(file, tableConstants);
-    if (!result) continue;
-    if (result.kind === "capability") {
-      capabilities.push(result.capability);
-    } else {
-      unclassified.push({ file: result.file, reason: result.reason });
-    }
-  }
-
-  capabilities.sort((a, b) => {
-    const ka = `${a.module}:${a.name}`;
-    const kb = `${b.module}:${b.name}`;
-    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  const calls = [];
+  visit(source, (n) => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isIdentifier(n.expression) &&
+      actionNames.has(n.expression.text)
+    )
+      calls.push(n);
   });
-  unclassified.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
-
-  // Deterministic output: no generatedAt timestamp. The freshness check is
-  // `git diff --exit-code`; a timestamp would trip it on every run.
-  const output = {
-    schemaVersion: 1,
-    capabilities,
-    unclassified,
-  };
-
-  fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
-  fs.writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 2) + "\n", "utf8");
-
-  const total = capabilities.length + unclassified.length;
-  console.log(
-    `[proof:scan] scanned ${files.length} action file(s); wrote ${capabilities.length} capabilities, ${unclassified.length} unclassified (total ${total}) to ${OUTPUT_PATH}`,
-  );
-  if (unclassified.length > 0) {
-    console.log(`[proof:scan] unclassified entries:`);
-    for (const u of unclassified) console.log(`  - ${u.file}: ${u.reason}`);
+  if (!calls.length) {
+    const mentionsFactory = [...actionNames].some((name) =>
+      new RegExp(`\\b${name}\\b`).test(source.text),
+    );
+    return {
+      capabilities: [],
+      unclassified: mentionsFactory
+        ? [
+            {
+              file,
+              reason: "action factory cannot be resolved to a direct call",
+            },
+          ]
+        : [],
+    };
   }
+  const problems = source.parseDiagnostics.map((d) =>
+    ts.flattenDiagnosticMessageText(d.messageText, " "),
+  );
+  visit(source, (n) => {
+    if (!ts.isIdentifier(n) || !actionNames.has(n.text)) return;
+    if (ts.isImportSpecifier(n.parent)) return;
+    if (ts.isCallExpression(n.parent) && n.parent.expression === n) return;
+    problems.push("action factory escapes a recognized direct call");
+  });
+  const clients = new Set();
+  visit(source, (n) => {
+    if (!ts.isVariableDeclaration(n) || !ts.isIdentifier(n.name)) return;
+    const value = unwrap(n.initializer);
+    if (
+      value &&
+      ts.isCallExpression(value) &&
+      ts.isIdentifier(value.expression) &&
+      serviceFactories.has(value.expression.text)
+    )
+      clients.add(n.name.text);
+  });
+  visit(source, (n) => {
+    if (!ts.isCallExpression(n)) return;
+    const isFactory =
+      (ts.isIdentifier(n.expression) &&
+        serviceFactories.has(n.expression.text)) ||
+      (ts.isPropertyAccessExpression(n.expression) &&
+        n.expression.name.text === "createSupabaseServiceClient");
+    if (!isFactory) return;
+    let parent = n.parent;
+    while (ts.isAwaitExpression(parent) || ts.isParenthesizedExpression(parent))
+      parent = parent.parent;
+    if (
+      !ts.isVariableDeclaration(parent) ||
+      !ts.isIdentifier(parent.name) ||
+      !clients.has(parent.name.text)
+    )
+      problems.push(
+        "service client factory result is not a recognized local client",
+      );
+  });
+  const mutations = new Map();
+  visit(source, (n) => {
+    if (ts.isIdentifier(n) && clients.has(n.text)) {
+      const parent = n.parent;
+      const declaration = ts.isVariableDeclaration(parent) && parent.name === n;
+      const query =
+        ts.isPropertyAccessExpression(parent) &&
+        parent.expression === n &&
+        parent.name.text === "from";
+      if (!declaration && !query)
+        problems.push(
+          `service client ${n.text} escapes a recognized query chain`,
+        );
+    }
+    if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression))
+      return;
+    if (
+      n.expression.name.text === "from" &&
+      ts.isIdentifier(n.expression.expression) &&
+      clients.has(n.expression.expression.text)
+    ) {
+      let chain = n;
+      while (
+        chain.parent &&
+        (ts.isPropertyAccessExpression(chain.parent) ||
+          ts.isCallExpression(chain.parent))
+      )
+        chain = chain.parent;
+      let parent = chain.parent;
+      while (
+        parent &&
+        (ts.isAwaitExpression(parent) || ts.isParenthesizedExpression(parent))
+      )
+        parent = parent.parent;
+      if (
+        parent &&
+        ts.isVariableDeclaration(parent) &&
+        !ts.isAwaitExpression(chain.parent)
+      )
+        problems.push("service query builder escapes its recognized chain");
+    }
+    const operation = n.expression.name.text;
+    if (!["insert", "upsert", "update", "delete"].includes(operation)) return;
+    let from = n.expression.expression;
+    while (
+      ts.isCallExpression(from) &&
+      ts.isPropertyAccessExpression(from.expression) &&
+      from.expression.name.text !== "from"
+    )
+      from = from.expression.expression;
+    if (
+      !ts.isCallExpression(from) ||
+      !ts.isPropertyAccessExpression(from.expression) ||
+      from.expression.name.text !== "from"
+    )
+      return;
+    const client = from.expression.expression;
+    if (!ts.isIdentifier(client) || !clients.has(client.text)) {
+      problems.push(
+        "mutation query uses a client whose privilege cannot be resolved",
+      );
+      return;
+    }
+    const table =
+      literal(from.arguments[0]) ??
+      (from.arguments[0] && ts.isIdentifier(from.arguments[0])
+        ? constants.get(from.arguments[0].text)
+        : undefined);
+    if (!table) {
+      problems.push(
+        "service-role mutation uses an unresolved table expression",
+      );
+      return;
+    }
+    mutations.set(`${table}:${operation}`, { table, operation });
+  });
+  const capabilities = [];
+  for (const call of calls) {
+    const name = literal(property(call.arguments[0], "functionName"));
+    if (!name) {
+      problems.push("createAction requires a literal functionName");
+      continue;
+    }
+    let owner = call;
+    while (
+      owner.parent &&
+      (ts.isPropertyAccessExpression(owner.parent) ||
+        ts.isCallExpression(owner.parent) ||
+        ts.isParenthesizedExpression(owner.parent))
+    )
+      owner = owner.parent;
+    const proofCalls = [];
+    visit(owner, (n) => {
+      if (
+        ts.isCallExpression(n) &&
+        ts.isIdentifier(n.expression) &&
+        n.expression.text === "withProof"
+      )
+        proofCalls.push(n);
+    });
+    const proof =
+      proofCalls.length === 1 ? proofCalls[0].arguments[0] : undefined;
+    if (proofCalls.length > 1)
+      problems.push(`ambiguous withProof metadata for ${name}`);
+    if (proof && !ts.isObjectLiteralExpression(proof))
+      problems.push(`unresolved withProof metadata for ${name}`);
+    const inv = property(proof, "invariants");
+    const invariants =
+      inv && ts.isArrayLiteralExpression(inv) ? inv.elements.map(literal) : [];
+    if (
+      inv &&
+      (!ts.isArrayLiteralExpression(inv) ||
+        invariants.some((v) => v === undefined))
+    )
+      problems.push(`unresolved invariants for ${name}`);
+    const exportName = exportedName(call, source);
+    if (!exportName)
+      problems.push(`cannot associate ${name} with one exported wrapper`);
+    const body = owner.getText(source);
+    capabilities.push({
+      name,
+      module: extractModule(file),
+      exportName,
+      verb: literal(property(proof, "verb")) ?? null,
+      object: literal(property(proof, "object")) ?? null,
+      invariants: invariants.filter(Boolean),
+      // Conservative file-level attribution prevents a wrapper outside the
+      // builder expression from silently removing an action coverage obligation.
+      acceptsWorkspaceId: /\bworkspace_?id\b/i.test(source.text),
+      internalOnly: file.endsWith("_BOT.ts"),
+      usesDirectUpdateTag:
+        /import\s*\{[^}]*\bupdateTag\b[^}]*\}\s*from\s*["']next\/cache["']/.test(
+          source.text,
+        ),
+      serviceRoleMutations: [...mutations.values()].sort((a, b) =>
+        `${a.table}:${a.operation}`.localeCompare(`${b.table}:${b.operation}`),
+      ),
+      middleware: {
+        auth: /\bwithAuth\s*\(/.test(body),
+        tenantIsolation: /\bwithTenantIsolation\s*\(/.test(body),
+        rbac: /\bwithRBAC\s*\(/.test(body),
+      },
+      file: path.relative(process.cwd(), file).split(path.sep).join("/"),
+    });
+  }
+  return {
+    capabilities,
+    unclassified: [...new Set(problems)].map((reason) => ({ file, reason })),
+  };
 }
-
+export function main() {
+  const constants = readTableConstants();
+  const scanned = listActionFiles()
+    .sort()
+    .map((file) => scanFile(file, constants));
+  const capabilities = scanned
+    .flatMap((r) => r.capabilities)
+    .sort((a, b) =>
+      `${a.module}:${a.name}`.localeCompare(`${b.module}:${b.name}`),
+    );
+  const unclassified = scanned.flatMap((r) => r.unclassified);
+  const refs = new Set();
+  for (const cap of capabilities) {
+    const ref = `${cap.module}:${cap.name}`;
+    if (refs.has(ref))
+      unclassified.push({
+        file: cap.file,
+        reason: `duplicate capability ${ref}`,
+      });
+    refs.add(ref);
+  }
+  fs.mkdirSync(path.dirname(OUTPUT_PATH), { recursive: true });
+  fs.writeFileSync(
+    OUTPUT_PATH,
+    JSON.stringify({ schemaVersion: 1, capabilities, unclassified }, null, 2) +
+      "\n",
+  );
+  console.log(
+    `[proof:scan] wrote ${capabilities.length} capabilities, ${unclassified.length} unclassified`,
+  );
+  if (unclassified.length)
+    throw new Error(
+      `[PROOF_FAIL] capabilities_unassessed: ${unclassified.map((p) => `${p.file}: ${p.reason}`).join("; ")}`,
+    );
+}
 const invokedDirectly =
   process.argv[1] !== undefined &&
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-
 if (invokedDirectly) main();

@@ -200,40 +200,50 @@ export const seed = {
     // `auth.users`. The `handle_new_user` trigger mirrors the row on
     // `auth.users` INSERT; poll briefly to rule out any post-commit
     // visibility race before the FK insert below.
-    await waitForPublicUser(sb, userId, opts.email);
+    try {
+      await waitForPublicUser(sb, userId, opts.email);
 
-    const {
-      data: memberRow,
-      error: memberErr,
-      status: memberStatus,
-    } = await sb
-      .from("workspace_members")
-      .insert({
-        workspace_id: opts.workspace.id,
-        user_id: userId,
+      const {
+        data: memberRow,
+        error: memberErr,
+        status: memberStatus,
+      } = await sb
+        .from("workspace_members")
+        .insert({
+          workspace_id: opts.workspace.id,
+          user_id: userId,
+          role: opts.role,
+        })
+        .select("id")
+        .single();
+
+      if (memberErr || !memberRow) {
+        failSeed(
+          "seed_user_membership",
+          `workspace_members row for user ${opts.email} in workspace ${opts.workspace.id}`,
+          `insert error: ${memberErr?.message ?? "no row returned"}`,
+          memberErr,
+          memberStatus,
+        );
+      }
+
+      return {
+        id: userId,
+        email: opts.email,
+        password: opts.password,
+        workspaceId: opts.workspace.id,
         role: opts.role,
-      })
-      .select("id")
-      .single();
-
-    if (memberErr || !memberRow) {
-      failSeed(
-        "seed_user_membership",
-        `workspace_members row for user ${opts.email} in workspace ${opts.workspace.id}`,
-        `insert error: ${memberErr?.message ?? "no row returned"}`,
-        memberErr,
-        memberStatus,
-      );
+        membershipId: memberRow.id,
+      };
+    } catch (error) {
+      const cleanup = await sb.auth.admin.deleteUser(userId);
+      if (cleanup.error)
+        throw new AggregateError(
+          [error, cleanup.error],
+          "[PROOF_FAIL] seed_cleanup: failed to remove partially seeded user",
+        );
+      throw error;
     }
-
-    return {
-      id: userId,
-      email: opts.email,
-      password: opts.password,
-      workspaceId: opts.workspace.id,
-      role: opts.role,
-      membershipId: memberRow.id,
-    };
   },
 
   /**
@@ -242,7 +252,11 @@ export const seed = {
    */
   async deleteWorkspace(workspaceId: string): Promise<void> {
     const sb = createProofServiceClient();
-    await sb.from("workspaces").delete().eq("id", workspaceId);
+    const { error } = await sb
+      .from("workspaces")
+      .delete()
+      .eq("id", workspaceId);
+    if (error) throw new Error(`[PROOF_FAIL] seed_cleanup: ${error.message}`);
   },
 
   /**
@@ -252,6 +266,7 @@ export const seed = {
    */
   async deleteUser(userId: string): Promise<void> {
     const sb = createProofServiceClient();
-    await sb.auth.admin.deleteUser(userId);
+    const { error } = await sb.auth.admin.deleteUser(userId);
+    if (error) throw new Error(`[PROOF_FAIL] seed_cleanup: ${error.message}`);
   },
 };

@@ -27,6 +27,76 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
+### Unreleased audit hardening
+
+Release candidate `0.1.0-next.7` tightens acceptance behavior; it has not been published. Trace
+schema remains 2, with additive source/execution identity fields. Version 1
+and unversioned trace shapes remain explicitly readable, but CLI acceptance
+requires current provenance. Required consumer changes:
+
+- Regenerate traces. `verify`, `coverage`, and mutation inventory share a
+  decoder: corrupt JSON, duplicate proof IDs, unknown vocabulary, and
+  contradictory verdicts fail. Only passing baseline evidence can satisfy
+  claims; mutation evidence is separate. Current spec contents must match
+  `specHash`; in Git worktrees both `commit` and `sourceHash` must match.
+  `sourceHash` includes tracked and untracked nonignored inputs and excludes
+  configured generated artifacts. Run generators before proofs. Non-Git
+  exports cannot establish whole-source freshness and only check spec hashes.
+- Use a dedicated trace directory. The writer honors `artifacts.traces` and
+  the runner's `--traces-dir` override. IDs must use letters, digits, dots,
+  underscores, or hyphens, starting with a letter or digit. Duplicate IDs
+  cannot overwrite another proof; a later Playwright retry of the same test
+  may replace its earlier attempt. Standalone repeated runs need fresh output.
+  Mission aggregates now live at `<traces>/missions/<missionId>.json` to
+  prevent collisions with proof IDs. Cleanup refuses unknown JSON before
+  deleting any trace and rejects repository/ancestor directories, including
+  symlink aliases. Move legacy or corrupt files aside before rerunning.
+- UPDATE denial probes require stable `identityColumns` (default `["id"]`),
+  present and non-null in every target row, excluded from the update payload.
+  The attempted update must change a value. Rereads use original identities,
+  even when a write changes a filter column. SQL errors other than `42501`
+  are incomplete evidence. INSERT probes require a payload absent before the
+  probe and valid for a service-role control insertion; that control is
+  cleaned up. HTTP expectations must contain a status or a nonempty matcher
+  list. Write requests are never automatically retried after transport errors.
+- Capability discovery uses TypeScript syntax analysis for import aliases and
+  multiple actions. Unknown factory/client indirection, escaped service query
+  builders, dynamic table names, and ambiguous metadata block assessment.
+  Discovery still assumes the configured template action layout.
+- The SQL parser is deliberately conservative, not a final PostgreSQL catalog
+  evaluator. Unsupported ALTER/DROP or dynamic SQL makes schema assessment
+  fail. RLS must be explicitly enabled for classification; public ALL/write
+  policies are never exempted as public-read. Policy expressions and mode
+  participate in drift. Resolve unsupported migrations with a catalog-backed
+  integration before using this parser as a gate; do not edit shipped SQL or
+  mark an unassessed artifact assessed to obtain a pass.
+- Drift always regenerates both trees using the installed harness and each
+  tree's consumer configuration. It includes untracked actions, SQL, and
+  lockfiles. For ignored/generated migrations, configure `driftPrepare` as a
+  command argv array (for example `["node", "scripts/aggregate_migrations.mjs",
+  "--fresh"]`). That consumer-owned command runs in each tree before parsing;
+  failure prevents assessment. It must work in the archived tree without an
+  implicit dependency install. The old `driftSources` optimization is unused.
+- Mutations require fresh mapped baseline claims and write isolated traces.
+  SQL applies run as one transaction; recovery is attempted even after a
+  failed apply. Policy snapshots preserve expressions, roles, command, and
+  permissive/restrictive mode. Generic privilege mutations support direct,
+  owner-issued grants without grant options; unsupported inherited/PUBLIC or
+  ownership cases fail before planting. Move old mutation outputs aside on
+  first use: nonempty output directories require a harness ownership marker.
+  An interrupted run leaves `mutation-recovery.json` beside the mutation output
+  directory. Run `proof-harness mutate --recover` against the same local
+  database to restore and verify the journaled subject. A timeout, signal, or
+  incomplete failed claim never counts as detection. Recovery covers the
+  catalog's declared subject and cleanup, not arbitrary undeclared side effects.
+- Partial fixture setup is cleaned up, and cleanup errors now fail the proof.
+
+These checks validate observed evidence. Protect the installed harness,
+configuration, mission, policies, mutation catalog, and CI acceptance job from
+executor edits. Trace metadata is not a signature or a sandbox: it cannot
+establish honesty against an executor allowed to replace the gate or fabricate
+its inputs. Independent product acceptance and a trusted runner remain needed.
+
 ### 0.1.0-next.6
 
 **Removed: the module-descriptor system.** It served the consumer's planner

@@ -1,3 +1,10 @@
+import {
+  loadProofConfig,
+  evidenceExclusions,
+  assertArtifactDirectory,
+} from "../../cli/config.mjs";
+import { sourceHash } from "../node/source-hash";
+import { isArtifactId } from "../node/evidence";
 // Import External Packages
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
@@ -32,11 +39,9 @@ import {
 // optional `missionId` and confirms every `trace_must_prove` requirement has
 // a matching passing step across the group.
 //
-// Write path in v0.5 is hardcoded to `<cwd>/.proof/traces/`. Playwright runs
-// from the repo root so this resolves to `<repo>/.proof/traces/`.
+// The configured artifact directory is honored; PROOF_TRACES_DIR overrides it
+// for runner-owned and isolated mutation runs.
 // ---------------------------------------------------------------------------
-
-const TRACE_DIR_RELATIVE = [".proof", "traces"] as const;
 
 /**
  * AsyncLocalStorage used to pipe `recordAssertion(...)` calls from inside
@@ -92,6 +97,16 @@ export async function withoutAssertionProvenance<T>(
  * them as spec-authored claims rather than SDK-verified probes.
  */
 export function recordAssertion(assertion: TraceAssertion): void {
+  if (
+    assertion.status !== undefined &&
+    (!["passed", "failed", "skipped", "incomplete"].includes(
+      assertion.status,
+    ) ||
+      (assertion.status === "passed") !== assertion.passed)
+  )
+    throw new Error(
+      "[PROOF_FAIL] trace_shape: assertion status contradicts passed",
+    );
   const bucket = currentStepAssertions.getStore();
   if (!bucket) return;
   // Provenance comes from the execution context, never from the caller: a
@@ -143,7 +158,9 @@ class TraceRecorderImpl {
         actor: opts.actor,
         workspaceId: opts.workspaceId,
         observation,
-        passed: true,
+        passed: !assertions.some(
+          (a) => a.passed === false && a.status !== "skipped",
+        ),
         durationMs: Math.round(durationMs),
         ...(assertions.length > 0 ? { assertions: [...assertions] } : {}),
       });
@@ -209,11 +226,41 @@ function specProvenance(): { specFile?: string; specHash?: string } {
   }
 }
 
-function writeArtifact(proofId: string, artifact: TraceArtifact): void {
-  const traceDir = path.join(process.cwd(), ...TRACE_DIR_RELATIVE);
+async function writeArtifact(
+  proofId: string,
+  artifact: TraceArtifact,
+): Promise<void> {
+  const config = await loadProofConfig();
+  const traceDir = process.env.PROOF_TRACES_DIR
+    ? path.resolve(process.env.PROOF_TRACES_DIR)
+    : path.resolve(config.rootDir, config.artifacts.traces);
+  assertArtifactDirectory(traceDir, config.rootDir);
   fs.mkdirSync(traceDir, { recursive: true });
   const target = path.join(traceDir, `${proofId}.json`);
-  fs.writeFileSync(target, JSON.stringify(artifact, null, 2), "utf8");
+  const temporary = path.join(
+    traceDir,
+    `.${proofId}-${crypto.randomUUID()}.tmp`,
+  );
+  fs.writeFileSync(temporary, JSON.stringify(artifact, null, 2), "utf8");
+  try {
+    try {
+      fs.linkSync(temporary, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const previous = JSON.parse(
+        fs.readFileSync(target, "utf8"),
+      ) as TraceArtifact;
+      if (
+        !artifact.executionId ||
+        previous.executionId !== artifact.executionId ||
+        (artifact.retry ?? 0) <= (previous.retry ?? 0)
+      )
+        throw new Error(`[PROOF_FAIL] duplicate_proof_id: ${proofId}`);
+      fs.renameSync(temporary, target);
+    }
+  } finally {
+    if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+  }
 }
 
 function normalizeOptions(arg: string | ProofOptions): ProofOptions {
@@ -250,28 +297,52 @@ export const trace = {
     fn: (t: TraceRecorderImpl) => Promise<void>,
   ): Promise<void> {
     const { proofId, missionId } = normalizeOptions(arg);
+    if (
+      !isArtifactId(proofId) ||
+      (missionId !== undefined && !isArtifactId(missionId))
+    )
+      throw new Error("[PROOF_FAIL] trace_shape: unsafe proof or mission ID");
+    let execution: { executionId?: string; retry?: number } = {};
+    try {
+      const info = test.info();
+      execution = {
+        executionId: `${info.project.name}:${info.testId}:${info.repeatEachIndex}`,
+        retry: info.retry,
+      };
+    } catch {
+      /* standalone writer */
+    }
     const startedAt = performance.now();
     const timestamp = new Date().toISOString();
     const recorder = new TraceRecorderImpl(proofId);
 
     let proofError: unknown;
+    let threw = false;
     try {
       await fn(recorder);
     } catch (error) {
       proofError = error;
+      threw = true;
     }
 
     const durationMs = Math.round(performance.now() - startedAt);
     const steps = recorder.getSteps();
-    const passed = !proofError && steps.every((s) => s.passed);
+    const passed = !threw && steps.every((s) => s.passed);
     const mutation = mutationProvenance();
 
+    const config = await loadProofConfig();
+    const excluded = evidenceExclusions(config);
+    if (process.env.PROOF_TRACES_DIR)
+      excluded.push(path.resolve(process.env.PROOF_TRACES_DIR));
     const artifact: TraceArtifact = {
       schemaVersion: TRACE_ARTIFACT_SCHEMA_VERSION,
+      ...execution,
       proofId,
       ...(missionId ? { missionId } : {}),
       ...specProvenance(),
       ...codeProvenance(),
+      sourceHash:
+        process.env.PROOF_SOURCE_HASH || sourceHash(config.rootDir, excluded),
       ...(mutation ? { mutation } : {}),
       timestamp,
       durationMs,
@@ -279,8 +350,10 @@ export const trace = {
       steps: [...steps],
     };
 
-    writeArtifact(proofId, artifact);
+    await writeArtifact(proofId, artifact);
 
-    if (proofError) throw proofError;
+    if (threw) throw proofError;
+    if (!passed)
+      throw new Error("[PROOF_FAIL] proof_run: recorded assertions failed");
   },
 };

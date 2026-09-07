@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readTraceDirectory } from "../../dist/node.js";
 // ---------------------------------------------------------------------------
 // proof_mutation_check.mjs
 //
@@ -51,7 +52,12 @@ import {
   restoreSourceMutation,
   snapshotSourceMutation,
 } from "./proof_source_mutation.mjs";
-import { loadMutationCatalog, loadProofConfig } from "../config.mjs";
+import {
+  loadMutationCatalog,
+  loadProofConfig,
+  evidenceExclusions,
+  assertArtifactDirectory,
+} from "../config.mjs";
 
 const CONFIG = await loadProofConfig();
 process.chdir(CONFIG.rootDir);
@@ -65,6 +71,12 @@ const TRACE_DIR = CONFIG.artifacts.traces;
 const SCHEMA_PATH = CONFIG.artifacts.schema;
 const MUTATION_POLICY_PATH = CONFIG.policies.mutation;
 const MUTATION_ARTIFACT_DIR = CONFIG.artifacts.mutations;
+const RECOVERY_FILE = path.join(
+  path.dirname(MUTATION_ARTIFACT_DIR),
+  "mutation-recovery.json",
+);
+let interrupted = false;
+let activeProof = null;
 
 // ---------------------------------------------------------------------------
 // Mutations
@@ -139,9 +151,13 @@ function runSql(container, sql) {
       "postgres",
       "-v",
       "ON_ERROR_STOP=1",
+      "--single-transaction",
+      "-f",
+      "-",
+      "-X",
       "-q",
     ],
-    { input: sql, encoding: "utf8" },
+    { input: sql, encoding: "utf8", timeout: 30_000 },
   );
   if (res.status !== 0) {
     throw new Error(
@@ -178,6 +194,10 @@ function queryScalar(container, sql) {
   return res.stdout.trim();
 }
 
+function quoteIdentifier(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
 function quoteLiteral(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
@@ -189,6 +209,29 @@ function quoteLiteral(value) {
 // that exact definition back. `restore` is therefore always derived from what was
 // really there a moment ago, never from an assumption baked into this file.
 // ---------------------------------------------------------------------------
+
+function assertDirectPrivilege(container, subject, functionSubject = false) {
+  const catalog = functionSubject ? "pg_proc" : "pg_class";
+  const acl = functionSubject ? "proacl" : "relacl";
+  const owner = functionSubject ? "proowner" : "relowner";
+  const object = functionSubject
+    ? `${quoteLiteral(subject.signature)}::regprocedure`
+    : `${quoteLiteral(subject.table)}::regclass`;
+  const defaultKind = functionSubject ? "f" : "r";
+  const supported = queryScalar(
+    container,
+    `SELECT NOT EXISTS (
+    SELECT 1 FROM ${catalog} c, LATERAL aclexplode(coalesce(c.${acl},acldefault('${defaultKind}',c.${owner}))) a
+    WHERE c.oid = ${object} AND a.privilege_type = ${quoteLiteral(subject.privilege.toUpperCase())}
+      AND ((a.grantee = ${quoteLiteral(subject.role)}::regrole AND (a.is_grantable OR a.grantor <> c.${owner}))
+        OR (a.grantee <> ${quoteLiteral(subject.role)}::regrole AND (a.grantee = 0 OR pg_has_role(${quoteLiteral(subject.role)},a.grantee,'USAGE'))))
+  ) AND NOT EXISTS (SELECT 1 FROM ${catalog} WHERE oid = ${object} AND ${owner} = ${quoteLiteral(subject.role)}::regrole)`,
+  );
+  if (supported !== "t")
+    throw new Error(
+      "[PROOF_FAIL] mutation_unassessed: privilege restoration supports owner-issued direct grants without grant options; inherited, PUBLIC, and owner privileges require a dedicated catalog mutation",
+    );
+}
 
 const SUBJECTS = {
   sourceFile: {
@@ -216,24 +259,28 @@ const SUBJECTS = {
   policy: {
     describe: (s) => `policy "${s.name}" on ${s.table}`,
     snapshot: (container, s) => {
-      const raw = queryScalar(
+      return queryScalar(
         container,
-        `SELECT coalesce(pg_get_expr(polqual, polrelid), '') || '~~~' ||
-                coalesce(pg_get_expr(polwithcheck, polrelid), '')
-         FROM pg_policy
-         WHERE polrelid = ${quoteLiteral(s.table)}::regclass
-           AND polname = ${quoteLiteral(s.name)}`,
+        `SELECT json_build_object(
+          'using',pg_get_expr(polqual,polrelid),
+          'check',pg_get_expr(polwithcheck,polrelid),
+          'command',polcmd,'permissive',polpermissive,
+          'roles',(SELECT json_agg(CASE WHEN r = 0 THEN 'PUBLIC' ELSE quote_ident(pg_get_userbyid(r)) END ORDER BY r) FROM unnest(polroles) r))::text
+         FROM pg_policy WHERE polrelid = ${quoteLiteral(s.table)}::regclass AND polname = ${quoteLiteral(s.name)}`,
       );
-      // A policy with neither USING nor WITH CHECK cannot be reconstructed.
-      return raw === "~~~" ? "" : raw;
     },
     restore: (s, snapshot) => {
-      const [using, check] = snapshot.split("~~~");
-      const clauses = [
-        using ? `USING (${using})` : "",
-        check ? `WITH CHECK (${check})` : "",
-      ].filter(Boolean);
-      return `ALTER POLICY "${s.name}" ON ${s.table} ${clauses.join(" ")};`;
+      const policy = JSON.parse(snapshot);
+      const commands = {
+        "*": "ALL",
+        r: "SELECT",
+        a: "INSERT",
+        w: "UPDATE",
+        d: "DELETE",
+      };
+      if (!commands[policy.command])
+        throw new Error("unrecognized policy command in snapshot");
+      return `DROP POLICY IF EXISTS ${quoteIdentifier(s.name)} ON ${s.table};\nCREATE POLICY ${quoteIdentifier(s.name)} ON ${s.table} AS ${policy.permissive ? "PERMISSIVE" : "RESTRICTIVE"} FOR ${commands[policy.command]} TO ${policy.roles.join(", ")} ${policy.using ? `USING (${policy.using})` : ""} ${policy.check ? `WITH CHECK (${policy.check})` : ""};`;
     },
   },
 
@@ -256,6 +303,7 @@ const SUBJECTS = {
   },
 
   tablePrivilege: {
+    preflight: (container, s) => assertDirectPrivilege(container, s),
     describe: (s) => `${s.privilege} on ${s.table} for ${s.role}`,
     snapshot: (container, s) =>
       queryScalar(
@@ -269,6 +317,7 @@ const SUBJECTS = {
   },
 
   functionPrivilege: {
+    preflight: (container, s) => assertDirectPrivilege(container, s, true),
     describe: (s) => `${s.privilege} on ${s.signature} for ${s.role}`,
     snapshot: (container, s) =>
       queryScalar(
@@ -294,6 +343,8 @@ function isSourceMutation(mutation) {
 
 function applyMutation(container, mutation, snapshot) {
   if (!isSourceMutation(mutation)) {
+    if (/\b(BEGIN|COMMIT|ROLLBACK|END\s+TRANSACTION)\b/i.test(mutation.apply))
+      throw new Error("mutation SQL must not control transactions");
     runSql(container, mutation.apply);
     return;
   }
@@ -368,6 +419,7 @@ function readMutationPolicy() {
 function buildMutationInventory() {
   const derived = deriveAutomaticRlsMutations({
     tracesDir: TRACE_DIR,
+    excludedPaths: evidenceExclusions(CONFIG),
     schemaPath: SCHEMA_PATH,
     explicitMutations: MUTATIONS,
   });
@@ -632,33 +684,14 @@ async function sharedDevServer() {
   );
 }
 
-function snapshotTraceFiles() {
-  const snapshot = new Map();
-  if (!fs.existsSync(TRACE_DIR)) return snapshot;
-  for (const entry of fs.readdirSync(TRACE_DIR, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-    const file = path.join(TRACE_DIR, entry.name);
-    snapshot.set(entry.name, fs.readFileSync(file, "utf8"));
-  }
-  return snapshot;
-}
-
-function changedTraceFiles(before) {
-  if (!fs.existsSync(TRACE_DIR)) return [];
-  const changed = [];
-  for (const entry of fs.readdirSync(TRACE_DIR, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-    const file = path.join(TRACE_DIR, entry.name);
-    const content = fs.readFileSync(file, "utf8");
-    if (before.get(entry.name) === content) continue;
-    const trace = JSON.parse(content);
-    // Aggregated mission artifacts also live here, but mutation Playwright runs
-    // only write per-proof traces with a steps array.
-    if (trace && Array.isArray(trace.steps)) {
-      changed.push({ name: entry.name, content, trace });
-    }
-  }
-  return changed;
+function changedTraceFiles(directory) {
+  return readTraceDirectory(directory, { checkFreshness: false }).map(
+    (trace) => ({
+      name: `${trace.proofId}.json`,
+      content: JSON.stringify(trace, null, 2),
+      trace,
+    }),
+  );
 }
 
 function failedClaimKeys(changed) {
@@ -668,6 +701,7 @@ function failedClaimKeys(changed) {
       for (const assertion of step.assertions ?? []) {
         if (
           assertion.passed !== false ||
+          !assertion.emittedBy ||
           assertion.status === "skipped" ||
           assertion.status === "incomplete" ||
           typeof assertion.operation !== "string"
@@ -683,8 +717,13 @@ function failedClaimKeys(changed) {
   return keys;
 }
 
-function archiveMutationTraces(mutation, before, playwrightFailed, reasonOk) {
-  const changed = changedTraceFiles(before);
+function archiveMutationTraces(
+  mutation,
+  directory,
+  playwrightFailed,
+  reasonOk,
+) {
+  const changed = changedTraceFiles(directory);
   if (changed.length === 0) {
     throw new Error(
       `mutation ${mutation.id} produced no fresh trace artifact; a non-zero Playwright exit without trace evidence cannot demonstrate detection`,
@@ -698,9 +737,11 @@ function archiveMutationTraces(mutation, before, playwrightFailed, reasonOk) {
     ? mutation.claims
     : (mutation.resolvedClaims ?? []);
   const redClaims = failedClaimKeys(changed);
-  const claimsTurnedRed = requiredClaims.every((claim) =>
-    redClaims.has(`${claim.kind}\0${claim.target}\0${claim.operation}`),
-  );
+  const claimsTurnedRed =
+    requiredClaims.length > 0 &&
+    requiredClaims.every((claim) =>
+      redClaims.has(`${claim.kind}\0${claim.target}\0${claim.operation}`),
+    );
   const detected = playwrightFailed && traceTurnedRed && claimsTurnedRed;
 
   for (const item of changed) {
@@ -762,7 +803,7 @@ function writeMutationSummary(results, inventory) {
   );
 }
 
-function runProof(spec, mutationId) {
+function runProof(spec, mutationId, traceDirectory) {
   return new Promise((resolve) => {
     const playwrightCli = require.resolve("@playwright/test/cli");
     const child = spawn(
@@ -780,19 +821,31 @@ function runProof(spec, mutationId) {
         "--workers=1",
       ],
       {
+        detached: process.platform !== "win32",
         env: {
           ...process.env,
           CI: process.env.CI ?? "",
           PLAYWRIGHT_REUSE_EXISTING_SERVER: "true",
           PROOF_MUTATION_ID: mutationId,
+          PROOF_TRACES_DIR: path.resolve(traceDirectory),
         },
       },
     );
+    activeProof = child;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      signalProcessTree(child, "SIGKILL");
+    }, 120_000);
+    child.once("close", () => {
+      clearTimeout(timer);
+      activeProof = null;
+    });
     let output = "";
     child.stdout.on("data", (c) => (output += c.toString()));
     child.stderr.on("data", (c) => (output += c.toString()));
     child.on("error", (err) => resolve({ code: 1, output: String(err) }));
-    child.on("close", (code) => resolve({ code, output }));
+    child.on("close", (code) => resolve({ code, output, timedOut }));
   });
 }
 
@@ -805,6 +858,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     if (v === "--inventory") args.inventory = true;
+    else if (v === "--recover") args.recover = true;
     else if (v === "--list") args.list = true;
     else if (v === "--only") args.only = argv[++i];
     else if (v === "--help" || v === "-h") args.help = true;
@@ -818,11 +872,31 @@ function parseArgs(argv) {
 
 export async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.recover) {
+    if (!fs.existsSync(RECOVERY_FILE))
+      throw new Error("no mutation recovery journal exists");
+    const journal = JSON.parse(fs.readFileSync(RECOVERY_FILE, "utf8"));
+    if (!journal.subject || typeof journal.snapshot !== "string")
+      throw new Error("invalid recovery journal");
+    assertLocalDatabase();
+    const container = `supabase_db_${readProjectId()}`;
+    if (journal.container !== container)
+      throw new Error("recovery journal belongs to a different database");
+    restoreMutation(
+      container,
+      journal,
+      subjectHandler(journal.subject),
+      journal.snapshot,
+    );
+    fs.unlinkSync(RECOVERY_FILE);
+    console.log("[mutation] original subject restored and verified");
+    return;
+  }
   const inventory = buildMutationInventory();
   const mutations = inventory.mutations;
 
   if (args.help) {
-    console.log(`Usage: node scripts/proof_mutation_check.mjs [--inventory] [--list] [--only <id>]
+    console.log(`Usage: node scripts/proof_mutation_check.mjs [--inventory] [--list] [--only <id>] [--recover]
 
 Re-opens each known vulnerability, asserts the matching proof fails, reverts.
 Exits non-zero if any proof failed to notice its vulnerability.`);
@@ -904,9 +978,38 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
     process.exit(2);
   }
 
+  if (fs.existsSync(RECOVERY_FILE))
+    throw new Error(
+      `[PROOF_FAIL] mutation_recovery_required: restore the journaled subject before retrying; ${RECOVERY_FILE}`,
+    );
+  for (const mutation of selected) {
+    if (!mutation.resolvedClaims?.length)
+      throw new Error(
+        `[PROOF_FAIL] mutation_baseline_missing: ${mutation.id} has no fresh passing baseline claim`,
+      );
+  }
+  const mutationOutput = path.resolve(MUTATION_ARTIFACT_DIR);
+  assertArtifactDirectory(mutationOutput, CONFIG.rootDir);
+  const onSignal = () => {
+    interrupted = true;
+    if (activeProof) signalProcessTree(activeProof, "SIGTERM");
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
   // Mutation artifacts describe exactly one run. Keeping an earlier run here
   // would let stale planted failures masquerade as evidence from this one.
-  fs.rmSync(MUTATION_ARTIFACT_DIR, { recursive: true, force: true });
+  const ownership = path.join(mutationOutput, ".proof-harness-owned");
+  if (
+    fs.existsSync(mutationOutput) &&
+    fs.readdirSync(mutationOutput).length &&
+    !fs.existsSync(ownership)
+  )
+    throw new Error(
+      `[PROOF_FAIL] unsafe_mutation_directory: ${mutationOutput} is nonempty and has no harness ownership marker; move existing outputs aside`,
+    );
+  fs.rmSync(mutationOutput, { recursive: true, force: true });
+  fs.mkdirSync(mutationOutput, { recursive: true });
+  fs.writeFileSync(ownership, "proof-harness mutation outputs v1\n");
 
   assertLocalDatabase();
   const container = `supabase_db_${readProjectId()}`;
@@ -930,6 +1033,7 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
     }
 
     for (const m of selected) {
+      if (interrupted) throw new Error("mutation run interrupted");
       console.log(`── ${m.id} ──────────────────────────────────────────`);
       console.log(`   planting: ${m.breaks}`);
 
@@ -938,6 +1042,7 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
       let applied = false;
       let sourceServer = null;
       try {
+        handler.preflight?.(container, m.subject);
         snapshot = handler.snapshot(container, m.subject);
         if (snapshot === "") {
           throw new Error(
@@ -946,8 +1051,24 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
           );
         }
 
-        applyMutation(container, m, snapshot);
+        fs.mkdirSync(path.dirname(RECOVERY_FILE), { recursive: true });
+        fs.writeFileSync(
+          RECOVERY_FILE,
+          JSON.stringify(
+            {
+              id: m.id,
+              subject: m.subject,
+              snapshot,
+              cleanup: m.cleanup,
+              container,
+            },
+            null,
+            2,
+          ),
+          { mode: 0o600, flag: "wx" },
+        );
         applied = true;
+        applyMutation(container, m, snapshot);
 
         // A defect that is not demonstrably live proves nothing: running the
         // proof anyway would blame the proof ("MISSED") for a plant that never
@@ -972,8 +1093,17 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
           devServer = await sharedDevServer();
         }
 
-        const tracesBefore = snapshotTraceFiles();
-        const { code, output } = await runProof(m.spec, m.id);
+        const traceDirectory = path.join(MUTATION_ARTIFACT_DIR, ".runs", m.id);
+        const { code, output, timedOut } = await runProof(
+          m.spec,
+          m.id,
+          traceDirectory,
+        );
+        if (timedOut)
+          throw new Error(
+            "mutation proof timed out; no detection verdict can be issued",
+          );
+        if (interrupted) throw new Error("mutation run interrupted");
         const playwrightFailed = code !== 0;
 
         // The defect must still be live now that the proof has finished. If
@@ -999,7 +1129,7 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
           !m.expectFailureContains || output.includes(m.expectFailureContains);
         const archived = archiveMutationTraces(
           m,
-          tracesBefore,
+          traceDirectory,
           playwrightFailed,
           reasonOk,
         );
@@ -1054,6 +1184,7 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
             // Source mutations preserve dirty working-tree contents byte-for-byte;
             // database mutations preserve the live object's catalog definition.
             restoreMutation(container, m, handler, snapshot);
+            fs.unlinkSync(RECOVERY_FILE);
             console.log(
               `   reverted (${handler.describe(m.subject)} verified)\n`,
             );
@@ -1072,6 +1203,8 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
       }
     }
   } finally {
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
     if (devServer) await devServer.stop();
   }
 
