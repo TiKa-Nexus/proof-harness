@@ -54,7 +54,7 @@ describe("proof-harness package contents", () => {
     ) as Record<string, unknown>;
     expect(manifest).toMatchObject({
       name: "proof-harness",
-      version: "0.1.0-next.7",
+      version: "0.1.0-next.8",
       license: "Apache-2.0",
       repository: {
         type: "git",
@@ -84,8 +84,8 @@ describe("proof-harness package contents", () => {
 
     expect(packed).toMatchObject({
       name: "proof-harness",
-      version: "0.1.0-next.7",
-      filename: "proof-harness-0.1.0-next.7.tgz",
+      version: "0.1.0-next.8",
+      filename: "proof-harness-0.1.0-next.8.tgz",
     });
     expect(files).toEqual(
       expect.arrayContaining([

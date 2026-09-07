@@ -27,7 +27,13 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
-### Unreleased: direct RLS clients and Auth administration (#18)
+### 0.1.0-next.8
+
+Release candidate prepared for publication. Publish from `main` with workflow
+input `0.1.0-next.8` after this version change is merged. Consumers can pin
+`proof-harness@0.1.0-next.8` after the publish workflow succeeds.
+
+#### Direct RLS clients and Auth administration (#18)
 
 The scanner recognizes immutable local bindings returned by
 `createSupabaseRLSClient`, including named-import aliases and awaited calls.
@@ -52,11 +58,11 @@ Existing explicit action-gap policy handling remains unchanged; a recognized
 operation alone is not passing authorization evidence. Trace, mission and
 health protocol versions are unchanged; capability schema remains additive v1.
 
-### Unreleased: catalog providers and rollback INSERT controls (#19, #20)
+#### Catalog providers and rollback INSERT controls (#19, #20)
 
 These changes are not in the published `0.1.0-next.7`. They are opt-in; the
 default SQL parser and REST INSERT/DELETE control remain available. No trace,
-mission, or health protocol version changes. Pin the exact next candidate only
+mission, or health protocol version changes. Pin exactly `0.1.0-next.8` only
 after it is released.
 
 #### Catalog assessment

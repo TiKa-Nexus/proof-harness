@@ -1223,7 +1223,7 @@ It is authored, not derived, and is read only by `pnpm proof:coverage`; consumer
 do not need to parse it.
 
 
-## Catalog provider and rollback controls (unreleased)
+## Catalog provider and rollback controls (0.1.0-next.8)
 
 The protected consumer config may opt into `schemaProvider` protocol 1 and
 `insertControl.mode: "rollback"`. See [the setup and migration contract](COMPATIBILITY.md)
@@ -1237,7 +1237,7 @@ after its insert, deferred checks, rollback, and absence reread succeed. The
 original authenticated request remains the primary authorization assertion.
 
 
-## Direct Auth administration (unreleased)
+## Direct Auth administration (0.1.0-next.8)
 
 Capability schema v1 adds optional `serviceRoleAuthOperations`, currently a
 closed list containing only `"deleteUser"`. It describes direct service-client
