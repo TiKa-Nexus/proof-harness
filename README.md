@@ -91,3 +91,17 @@ Licensed under the [Apache License 2.0](./LICENSE).
 The package is released from this public repository with npm provenance.
 Prerelease consumers must pin an exact version rather than using `next`, `^`, or
 `~`; see [COMPATIBILITY.md](./COMPATIBILITY.md) for the compatibility policy.
+
+## Audit hardening (0.1.0-next.7, unreleased)
+
+The working branch adds shared fail-closed trace ingestion, source freshness,
+stronger authorization probes, isolated mutation evidence and interruption
+recovery, conservative discovery, and package-owned drift regeneration.
+See [required migration changes](COMPATIBILITY.md#unreleased-audit-hardening)
+before upgrading a consumer. In particular, existing traces must be rerun and
+unsupported SQL now blocks assessment.
+
+The harness establishes specific tested claims. Acceptance still requires
+consumer-owned requirements and a trusted CI job that controls the harness,
+policies, and evidence. A passing trace is not a general proof of code quality
+or a defense against an executor that can rewrite the acceptance gate.

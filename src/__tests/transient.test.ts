@@ -240,3 +240,17 @@ describe("createRetryingFetch", () => {
     expect(response.status).toBe(502);
   });
 });
+
+it.each(["POST", "PATCH", "DELETE"])(
+  "does not replay %s after an ambiguous gateway response",
+  async (method) => {
+    const base = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response("gateway", { status: 502 }));
+    await createRetryingFetch("probe", base)("/rest/v1/widgets", {
+      method,
+      body: '{"name":"once"}',
+    });
+    expect(base).toHaveBeenCalledTimes(1);
+  },
+);

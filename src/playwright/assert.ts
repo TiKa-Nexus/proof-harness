@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 // Import External Packages
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { APIResponse, Page } from "@playwright/test";
@@ -65,7 +66,9 @@ function proofFail(
   category: string,
   expected: string,
   found: string,
-  extras: { file?: string; suggestion: string },
+  extras: { file?: string; suggestion: string } = {
+    suggestion: "Correct the probe preconditions and rerun verification.",
+  },
 ): Error {
   return new Error(
     `[PROOF_FAIL] ${category}: expected ${expected}, found ${found}\n` +
@@ -253,19 +256,25 @@ export type TenantIsolationOptions = TenantIsolationBaseOptions &
   );
 
 async function teardown(
-  orgA: SeedWorkspace,
-  orgB: SeedWorkspace,
-  userA: SeedUser,
-  userB: SeedUser,
+  workspaces: SeedWorkspace[],
+  users: SeedUser[],
 ): Promise<void> {
-  await Promise.allSettled([
-    seed.deleteWorkspace(orgA.id),
-    seed.deleteWorkspace(orgB.id),
-  ]);
-  await Promise.allSettled([
-    seed.deleteUser(userA.id),
-    seed.deleteUser(userB.id),
-  ]);
+  const results = [
+    ...(await Promise.allSettled(
+      workspaces.map((org) => seed.deleteWorkspace(org.id)),
+    )),
+    ...(await Promise.allSettled(
+      users.map((user) => seed.deleteUser(user.id)),
+    )),
+  ];
+  const failures = results.filter(
+    (r): r is PromiseRejectedResult => r.status === "rejected",
+  );
+  if (failures.length)
+    throw new AggregateError(
+      failures.map((r) => r.reason),
+      "[PROOF_FAIL] fixture_cleanup: disposable resources could not be removed",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +316,8 @@ async function teardown(
 type AuthorizationOp = "select" | "insert" | "update" | "delete";
 
 interface RlsProbe {
+  /** Stable columns identifying UPDATE targets. Defaults to ["id"]. */
+  identityColumns?: string[];
   /** Table the probe operates against. */
   table: string;
   /** Operation the probe attempts. Each op has distinct "denied" semantics. */
@@ -544,6 +555,17 @@ async function requireWriteTargetVisible(args: {
   );
 }
 
+function requirePermissionError(
+  error: { message: string; code?: string } | null | undefined,
+): void {
+  if (error && error.code !== "42501")
+    throw proofFail(
+      "authorization_incomplete",
+      "an authorization denial (SQLSTATE 42501)",
+      `${error.code ?? "unknown"}: ${error.message}`,
+    );
+}
+
 async function runRlsProbe(
   probe: RlsProbe,
   actorCreds: { email: string; password: string; label: string },
@@ -597,6 +619,7 @@ async function runRlsProbe(
       "authorization_setup",
       `the actor's SELECT on ${probe.table}`,
     );
+    requirePermissionError(error);
     const rows = data ?? [];
 
     if (!error && rows.length > 0) {
@@ -637,6 +660,12 @@ async function runRlsProbe(
       );
     }
 
+    if ((await countMatchingAsService(sb, probe.table, probe.payload)) !== 0)
+      throw proofFail(
+        "authorization_vacuous",
+        "no pre-existing row matching the INSERT payload",
+        "matching rows already exist",
+      );
     // Deliberately NO .select() here.
     //
     // `.select()` makes PostgREST add a RETURNING clause, and RETURNING must
@@ -691,6 +720,58 @@ async function runRlsProbe(
       );
     }
 
+    requirePermissionError(error);
+    if (!error)
+      throw proofFail(
+        "authorization_incomplete",
+        "an explicit INSERT denial",
+        "no error and no committed row",
+      );
+    // A denied malformed payload proves nothing: exercise its constraints with the service role.
+    let controlError: unknown;
+    let controlFailed = false;
+    try {
+      const control = await sb.from(probe.table).insert(probe.payload);
+      if (control.error)
+        throw proofFail(
+          "authorization_incomplete",
+          "a valid INSERT payload",
+          control.error.message,
+        );
+      const controlCount = await countMatchingAsService(
+        sb,
+        probe.table,
+        probe.payload,
+      );
+      if (controlCount !== 1)
+        throw proofFail(
+          "authorization_incomplete",
+          "exactly one control row",
+          `${controlCount} control rows`,
+        );
+    } catch (error) {
+      controlFailed = true;
+      controlError = error;
+    }
+    const cleanup = await applyEq(sb.from(probe.table).delete(), probe.payload);
+    if (
+      cleanup.error ||
+      (await countMatchingAsService(sb, probe.table, probe.payload)) !== 0
+    )
+      throw proofFail(
+        "authorization_incomplete",
+        "control row cleanup",
+        cleanup.error?.message ?? "row remains",
+      );
+    if (controlFailed) throw controlError;
+    recordAssertion({
+      kind: "authorization",
+      target,
+      operation: probe.op,
+      role: "control",
+      passed: true,
+      detail: "service-role INSERT validated the payload and its constraints",
+    });
     recordAssertion({
       kind: "authorization",
       target,
@@ -782,6 +863,7 @@ async function runRlsProbe(
       );
     }
 
+    requirePermissionError(error);
     recordAssertion({
       kind: "authorization",
       target,
@@ -803,30 +885,35 @@ async function runRlsProbe(
   }
 
   const columns = Object.keys(probe.payload);
-
-  const readTargetRows = async () => {
-    const { data, error } = await applyEq(
-      sb.from(probe.table).select(columns.join(",")),
-      probe.filter as Record<string, unknown>,
+  const identity = probe.identityColumns ?? ["id"];
+  if (
+    !identity.length ||
+    identity.some((k) => !/^[A-Za-z_][\w]*$/.test(k) || columns.includes(k))
+  )
+    throw proofFail(
+      "authorization_incomplete",
+      "unchanged stable identity columns",
+      "missing or mutable identity",
     );
-    if (error) {
+  const readTargetRows = async (
+    filter = probe.filter as Record<string, unknown>,
+  ) => {
+    const { data, error } = await applyEq(
+      sb
+        .from(probe.table)
+        .select([...new Set([...identity, ...columns])].join(",")),
+      filter,
+    );
+    if (error)
       throw proofFail(
         "authorization_setup",
-        `to read ${columns.join(", ")} from "${probe.table}" with the service role`,
-        `Supabase error: ${error.message}`,
-        {
-          suggestion: `The probe compares these columns before and after the update to decide whether the write landed.`,
-        },
+        "a service-role target read",
+        error.message,
       );
-    }
     return (data ?? []) as unknown as Array<Record<string, unknown>>;
   };
-
   const rowMatchesPayload = (row: Record<string, unknown>) =>
-    columns.every(
-      (c) => JSON.stringify(row[c]) === JSON.stringify(probe.payload?.[c]),
-    );
-
+    columns.every((c) => isDeepStrictEqual(row[c], probe.payload?.[c]));
   const before = await readTargetRows();
 
   if (before.length === 0) {
@@ -848,6 +935,22 @@ async function runRlsProbe(
     );
   }
 
+  if (
+    before.some((row) =>
+      identity.some((k) => row[k] === undefined || row[k] === null),
+    )
+  )
+    throw proofFail(
+      "authorization_incomplete",
+      "stable target identities",
+      "identity is absent",
+    );
+  if (before.every(rowMatchesPayload))
+    throw proofFail(
+      "authorization_vacuous",
+      "an UPDATE that changes a value",
+      "payload already matches every target",
+    );
   await requireWriteTargetVisible({
     client,
     probe,
@@ -867,12 +970,18 @@ async function runRlsProbe(
     "authorization_setup",
     `the actor's UPDATE on ${probe.table}`,
   );
-  const after = await readTargetRows();
-
-  const beforeApplied = before.filter(rowMatchesPayload).length;
-  const afterApplied = after.filter(rowMatchesPayload).length;
-
-  if (afterApplied > beforeApplied) {
+  const after = (
+    await Promise.all(
+      before.map((row) =>
+        readTargetRows(Object.fromEntries(identity.map((k) => [k, row[k]]))),
+      ),
+    )
+  ).flat();
+  const beforeApplied = 0;
+  const afterApplied = before.filter(
+    (row, i) => !isDeepStrictEqual(row, after[i]),
+  ).length;
+  if (after.length !== before.length || afterApplied > 0) {
     recordAssertion({
       kind: "authorization",
       target,
@@ -891,6 +1000,7 @@ async function runRlsProbe(
     );
   }
 
+  requirePermissionError(error);
   recordAssertion({
     kind: "authorization",
     target,
@@ -1254,215 +1364,235 @@ const assertMethods = {
       opts.scopeColumn ?? (scope === "user" ? "user_id" : "workspace_id");
     validateTenantIsolationCriterion(table, scopeColumn, opts.criterion);
 
-    const orgA = await seed.workspace(`Proof OrgA ${tag}`, {
-      columns: opts.workspaceColumns,
-    });
-    const orgB = await seed.workspace(`Proof OrgB ${tag}`, {
-      columns: opts.workspaceColumns,
-    });
-
-    const userA = await seed.user({
-      email: `proof-a-${tag}@proof.test`,
-      password: `ProofPass!${tag}1`,
-      workspace: orgA,
-      role: "owner",
-    });
-    const userB = await seed.user({
-      email: `proof-b-${tag}@proof.test`,
-      password: `ProofPass!${tag}1`,
-      workspace: orgB,
-      role: "owner",
-    });
-
-    const sb = createProofServiceClient();
-
-    // Which column carries the tenant, and what each side's value is. Personal
-    // data is scoped by user, workspace data by workspace; `workspaces` and
-    // `users` carry their scope on the primary key, hence the override.
-    const scopePattern =
-      scope === "user"
-        ? "user_id = auth.uid()"
-        : "workspace_id IN (SELECT get_user_workspace_ids(auth.uid()))";
-    const sideA = scope === "user" ? userA.id : orgA.id;
-    const sideB = scope === "user" ? userB.id : orgB.id;
-    const labelA = scope === "user" ? "user A's rows" : "orgA";
-    const labelB = scope === "user" ? "user B's rows" : "orgB";
-
+    const createdWorkspaces: SeedWorkspace[] = [];
+    const createdUsers: SeedUser[] = [];
     try {
-      const fixtureContext: ProofFixtureContext = {
-        orgA,
-        orgB,
-        userA,
-        userB,
-        sb,
-      };
-
-      if (opts.fixture && opts.fixture.table !== table) {
-        recordAssertion({
-          kind: "tenant_isolation",
-          target: table,
-          operation: "select",
-          passed: false,
-          status: "incomplete",
-          role: "primary",
-          detail: `fixture for "${opts.fixture.table}" cannot seed proof target "${table}"`,
+      const orgA = await seed
+        .workspace(`Proof OrgA ${tag}`, {
+          columns: opts.workspaceColumns,
+        })
+        .then((value) => {
+          createdWorkspaces.push(value);
+          return value;
         });
-        throw proofFail(
-          "fixture_factory_mismatch",
-          `the imported fixture factory to declare table "${table}"`,
-          `factory declares "${opts.fixture.table}"`,
-          {
-            file: `e2e/fixtures/${table}.ts`,
-            suggestion:
-              `Import the factory owned by "${table}", or correct its table declaration. ` +
-              `A copied factory must not silently seed one table while the proof probes another.`,
-          },
-        );
-      }
+      const orgB = await seed
+        .workspace(`Proof OrgB ${tag}`, {
+          columns: opts.workspaceColumns,
+        })
+        .then((value) => {
+          createdWorkspaces.push(value);
+          return value;
+        });
+
+      const userA = await seed
+        .user({
+          email: `proof-a-${tag}@proof.test`,
+          password: `ProofPass!${tag}1`,
+          workspace: orgA,
+          role: "owner",
+        })
+        .then((value) => {
+          createdUsers.push(value);
+          return value;
+        });
+      const userB = await seed
+        .user({
+          email: `proof-b-${tag}@proof.test`,
+          password: `ProofPass!${tag}1`,
+          workspace: orgB,
+          role: "owner",
+        })
+        .then((value) => {
+          createdUsers.push(value);
+          return value;
+        });
+
+      const sb = createProofServiceClient();
+
+      // Which column carries the tenant, and what each side's value is. Personal
+      // data is scoped by user, workspace data by workspace; `workspaces` and
+      // `users` carry their scope on the primary key, hence the override.
+      const scopePattern =
+        scope === "user"
+          ? "user_id = auth.uid()"
+          : "workspace_id IN (SELECT get_user_workspace_ids(auth.uid()))";
+      const sideA = scope === "user" ? userA.id : orgA.id;
+      const sideB = scope === "user" ? userB.id : orgB.id;
+      const labelA = scope === "user" ? "user A's rows" : "orgA";
+      const labelB = scope === "user" ? "user B's rows" : "orgB";
 
       try {
-        // Fixture factories and setup callbacks are executor-authored code
-        // running inside this helper. Provenance is suspended around them so a
-        // hostile callback calling recordAssertion cannot inherit this
-        // helper's trusted stamp.
-        if (opts.fixture) {
-          await withoutAssertionProvenance(() =>
-            opts.fixture!.create(fixtureContext),
+        const fixtureContext: ProofFixtureContext = {
+          orgA,
+          orgB,
+          userA,
+          userB,
+          sb,
+        };
+
+        if (opts.fixture && opts.fixture.table !== table) {
+          recordAssertion({
+            kind: "tenant_isolation",
+            target: table,
+            operation: "select",
+            passed: false,
+            status: "incomplete",
+            role: "primary",
+            detail: `fixture for "${opts.fixture.table}" cannot seed proof target "${table}"`,
+          });
+          throw proofFail(
+            "fixture_factory_mismatch",
+            `the imported fixture factory to declare table "${table}"`,
+            `factory declares "${opts.fixture.table}"`,
+            {
+              file: `e2e/fixtures/${table}.ts`,
+              suggestion:
+                `Import the factory owned by "${table}", or correct its table declaration. ` +
+                `A copied factory must not silently seed one table while the proof probes another.`,
+            },
           );
-        } else {
-          await withoutAssertionProvenance(() => opts.setup!(fixtureContext));
         }
-      } catch (error) {
-        if (!isProofFixturePendingError(error)) throw error;
 
-        recordAssertion({
-          kind: "tenant_isolation",
-          target: table,
-          operation: "select",
-          passed: false,
-          status: "incomplete",
-          role: "primary",
-          detail: `fixture factory incomplete: ${error.reason}`,
+        try {
+          // Fixture factories and setup callbacks are executor-authored code
+          // running inside this helper. Provenance is suspended around them so a
+          // hostile callback calling recordAssertion cannot inherit this
+          // helper's trusted stamp.
+          if (opts.fixture) {
+            await withoutAssertionProvenance(() =>
+              opts.fixture!.create(fixtureContext),
+            );
+          } else {
+            await withoutAssertionProvenance(() => opts.setup!(fixtureContext));
+          }
+        } catch (error) {
+          if (!isProofFixturePendingError(error)) throw error;
+
+          recordAssertion({
+            kind: "tenant_isolation",
+            target: table,
+            operation: "select",
+            passed: false,
+            status: "incomplete",
+            role: "primary",
+            detail: `fixture factory incomplete: ${error.reason}`,
+          });
+          throw proofFail(
+            error.code,
+            `a completed fixture factory for "${table}"`,
+            error.reason,
+            {
+              file: `e2e/fixtures/${table}.ts`,
+              suggestion:
+                `Replace pendingProofFixture(...) with defineProofFixture(...), using values valid for the final schema. ` +
+                `Resolve required foreign keys from seeded/existing rows and honor NOT NULL, CHECK, domain, and enum constraints. ` +
+                `Do not weaken a product constraint to make the proof easier to seed.`,
+            },
+          );
+        }
+
+        // ---- Primary direction: orgA holds the data, userB must not see it ---
+        // `setup()` is contracted to populate orgA, so an empty orgA here means
+        // the proof is measuring nothing. Fail loudly rather than record the
+        // vacuous pass — a green "tenant isolation holds" on a table with no
+        // rows is worse than no proof at all, because it gets believed.
+        const forward = await probeTenantIsolation({
+          table,
+          viewer: userB,
+          viewerLabel: "user B",
+          owner: userA,
+          ownerLabel: "user A",
+          scopeColumn,
+          scopeValue: sideA,
+          scopeLabel: labelA,
+          criterion: opts.criterion,
+          scopePattern,
+          sb,
         });
-        throw proofFail(
-          error.code,
-          `a completed fixture factory for "${table}"`,
-          error.reason,
-          {
-            file: `e2e/fixtures/${table}.ts`,
-            suggestion:
-              `Replace pendingProofFixture(...) with defineProofFixture(...), using values valid for the final schema. ` +
-              `Resolve required foreign keys from seeded/existing rows and honor NOT NULL, CHECK, domain, and enum constraints. ` +
-              `Do not weaken a product constraint to make the proof easier to seed.`,
-          },
-        );
-      }
 
-      // ---- Primary direction: orgA holds the data, userB must not see it ---
-      // `setup()` is contracted to populate orgA, so an empty orgA here means
-      // the proof is measuring nothing. Fail loudly rather than record the
-      // vacuous pass — a green "tenant isolation holds" on a table with no
-      // rows is worse than no proof at all, because it gets believed.
-      const forward = await probeTenantIsolation({
-        table,
-        viewer: userB,
-        viewerLabel: "user B",
-        owner: userA,
-        ownerLabel: "user A",
-        scopeColumn,
-        scopeValue: sideA,
-        scopeLabel: labelA,
-        criterion: opts.criterion,
-        scopePattern,
-        sb,
-      });
+        if (forward === "skipped_no_data") {
+          recordAssertion({
+            kind: "tenant_isolation",
+            target: table,
+            operation: "select",
+            passed: false,
+            status: "incomplete",
+            role: "primary",
+            detail:
+              `fixture setup created 0 rows in "${table}" where ${scopeColumn} = ${sideA}` +
+              (opts.criterion
+                ? ` matching planner criterion "${opts.criterion.description}" (${JSON.stringify(opts.criterion.where)})`
+                : ""),
+          });
+          throw proofFail(
+            "tenant_isolation_vacuous",
+            `setup() to create at least one "${table}" row for ${labelA}${opts.criterion ? ` matching planner criterion "${opts.criterion.description}"` : ""} so there is something for user B to fail to see`,
+            `0 rows in "${table}" matching ${JSON.stringify({
+              [scopeColumn]: sideA,
+              ...(opts.criterion?.where ?? {}),
+            })} after setup() returned`,
+            {
+              suggestion:
+                `An empty table cannot demonstrate isolation: user B seeing 0 rows would be indistinguishable from working RLS. ` +
+                `Insert the fixture row(s) in e2e/fixtures/${table}.ts (or the inline setup) using the provided service-role client (\`sb\`), and make sure they carry ` +
+                `${scopeColumn} = ${sideA}${opts.criterion ? ` and satisfy planner criterion "${opts.criterion.description}" (${JSON.stringify(opts.criterion.where)})` : ""}.`,
+            },
+          );
+        }
 
-      if (forward === "skipped_no_data") {
-        recordAssertion({
-          kind: "tenant_isolation",
-          target: table,
-          operation: "select",
-          passed: false,
-          status: "incomplete",
-          role: "primary",
-          detail:
-            `fixture setup created 0 rows in "${table}" where ${scopeColumn} = ${sideA}` +
-            (opts.criterion
-              ? ` matching planner criterion "${opts.criterion.description}" (${JSON.stringify(opts.criterion.where)})`
-              : ""),
+        // ---- Reverse direction: only meaningful if the caller populated orgB -
+        // Legitimately skipped for the common single-org setup. Skipping records
+        // NOTHING, which is the point: the old behaviour recorded a passing
+        // assertion for this probe even against an empty orgB, and that pass was
+        // enough on its own to satisfy a mission's trace requirement.
+        const reverse = await probeTenantIsolation({
+          table,
+          viewer: userA,
+          viewerLabel: "user A",
+          owner: userB,
+          ownerLabel: "user B",
+          scopeColumn,
+          scopeValue: sideB,
+          scopeLabel: labelB,
+          criterion: opts.criterion,
+          scopePattern,
+          sb,
         });
-        throw proofFail(
-          "tenant_isolation_vacuous",
-          `setup() to create at least one "${table}" row for ${labelA}${opts.criterion ? ` matching planner criterion "${opts.criterion.description}"` : ""} so there is something for user B to fail to see`,
-          `0 rows in "${table}" matching ${JSON.stringify({
-            [scopeColumn]: sideA,
-            ...(opts.criterion?.where ?? {}),
-          })} after setup() returned`,
-          {
-            suggestion:
-              `An empty table cannot demonstrate isolation: user B seeing 0 rows would be indistinguishable from working RLS. ` +
-              `Insert the fixture row(s) in e2e/fixtures/${table}.ts (or the inline setup) using the provided service-role client (\`sb\`), and make sure they carry ` +
-              `${scopeColumn} = ${sideA}${opts.criterion ? ` and satisfy planner criterion "${opts.criterion.description}" (${JSON.stringify(opts.criterion.where)})` : ""}.`,
-          },
-        );
-      }
 
-      // ---- Reverse direction: only meaningful if the caller populated orgB -
-      // Legitimately skipped for the common single-org setup. Skipping records
-      // NOTHING, which is the point: the old behaviour recorded a passing
-      // assertion for this probe even against an empty orgB, and that pass was
-      // enough on its own to satisfy a mission's trace requirement.
-      const reverse = await probeTenantIsolation({
-        table,
-        viewer: userA,
-        viewerLabel: "user A",
-        owner: userB,
-        ownerLabel: "user B",
-        scopeColumn,
-        scopeValue: sideB,
-        scopeLabel: labelB,
-        criterion: opts.criterion,
-        scopePattern,
-        sb,
-      });
+        if (reverse === "skipped_no_data") {
+          // Recorded, not just logged: a direction that was never measured is a
+          // real state, and a consumer reading the trace must be able to see it
+          // rather than inferring it from one fewer passing assertion.
+          recordAssertion({
+            kind: "tenant_isolation",
+            target: table,
+            operation: "select",
+            passed: false,
+            status: "skipped",
+            role: "primary",
+            detail:
+              `reverse direction (A→B) not measured: setup() left ${labelB}${opts.criterion ? ` without rows matching planner criterion "${opts.criterion.description}"` : " empty"}, so there is nothing for user A to fail to see. ` +
+              `Populate both sides in setup() to prove isolation in both directions.`,
+          });
+          console.log(
+            `[proof] tenantIsolation(${table}): reverse probe (A→B) skipped — setup() left ${labelB}${opts.criterion ? ` without rows matching criterion "${opts.criterion.description}"` : " empty"}, ` +
+              `so there is nothing for user A to fail to see. The A→B direction is unproven; ` +
+              `populate it in setup() if you need it proven in both directions.`,
+          );
+        }
 
-      if (reverse === "skipped_no_data") {
-        // Recorded, not just logged: a direction that was never measured is a
-        // real state, and a consumer reading the trace must be able to see it
-        // rather than inferring it from one fewer passing assertion.
-        recordAssertion({
-          kind: "tenant_isolation",
-          target: table,
-          operation: "select",
-          passed: false,
-          status: "skipped",
-          role: "primary",
-          detail:
-            `reverse direction (A→B) not measured: setup() left ${labelB}${opts.criterion ? ` without rows matching planner criterion "${opts.criterion.description}"` : " empty"}, so there is nothing for user A to fail to see. ` +
-            `Populate both sides in setup() to prove isolation in both directions.`,
-        });
-        console.log(
-          `[proof] tenantIsolation(${table}): reverse probe (A→B) skipped — setup() left ${labelB}${opts.criterion ? ` without rows matching criterion "${opts.criterion.description}"` : " empty"}, ` +
-            `so there is nothing for user A to fail to see. The A→B direction is unproven; ` +
-            `populate it in setup() if you need it proven in both directions.`,
-        );
-      }
-
-      // ---- Optional check: secondary UI assertion -----------------------
-      if (page) {
-        await actAsUser.loginAs(page, userB.email, userB.password);
-        // Intentionally no product-specific navigation. The login itself
-        // asserts the auth cookie roundtrip; finally logs out this page before
-        // teardown deletes the disposable auth users.
-      }
-    } finally {
-      try {
+        // ---- Optional check: secondary UI assertion -----------------------
         if (page) {
-          await actAsUser.logout(page);
+          await actAsUser.loginAs(page, userB.email, userB.password);
+          // Intentionally no product-specific navigation. The login itself
+          // asserts the auth cookie roundtrip; finally logs out this page before
+          // teardown deletes the disposable auth users.
         }
       } finally {
-        await teardown(orgA, orgB, userA, userB);
+        if (page) await actAsUser.logout(page);
       }
+    } finally {
+      await teardown(createdWorkspaces, createdUsers);
     }
   },
 
@@ -1607,6 +1737,16 @@ const assertMethods = {
       mustNotContain?: RegExp[];
     };
   }): Promise<APIResponse> {
+    if (
+      opts.expect.status === undefined &&
+      !opts.expect.mustContain?.length &&
+      !opts.expect.mustNotContain?.length
+    )
+      throw proofFail(
+        "bad_options",
+        "at least one effective HTTP expectation",
+        "empty expectations",
+      );
     const target = opts.target ?? opts.path;
     const method = opts.method ?? "GET";
     const role: AssertionRole = opts.role ?? "primary";

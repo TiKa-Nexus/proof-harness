@@ -1,3 +1,4 @@
+import { sourceHash } from "../node/source-hash";
 // Import External Packages
 import { spawnSync } from "node:child_process";
 // Import Local Imports
@@ -31,6 +32,7 @@ import { spawnSync } from "node:child_process";
 export interface CodeProvenance {
   commit?: string;
   dirty?: boolean;
+  sourceHash?: string;
 }
 
 /** Environment variables `proof-harness verify` sets for the spec run. */
@@ -100,6 +102,9 @@ let cached: CodeProvenance | undefined;
  * at worst — and none at all when the runner supplied the values.
  */
 export function codeProvenance(): CodeProvenance {
-  cached ??= resolveCodeProvenance();
+  cached ??= {
+    ...resolveCodeProvenance(),
+    sourceHash: process.env.PROOF_SOURCE_HASH || sourceHash(),
+  };
   return cached;
 }

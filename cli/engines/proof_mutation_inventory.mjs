@@ -1,3 +1,4 @@
+import { readTraceDirectory } from "../../dist/node.js";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -240,15 +241,6 @@ function automaticMutationId(claim) {
   return `AUTO-RLS-${specName}-${claim.table}`;
 }
 
-function traceFiles(tracesDir) {
-  if (!fs.existsSync(tracesDir)) return [];
-  return fs
-    .readdirSync(tracesDir)
-    .filter((file) => file.endsWith(".json"))
-    .map((file) => path.join(tracesDir, file))
-    .sort();
-}
-
 /**
  * Derive broad, policy-name-independent RLS mutations from fresh green
  * evidence. Only passing primary tenant-isolation assertions for classified
@@ -260,6 +252,7 @@ export function deriveAutomaticRlsMutations({
   schemaPath,
   explicitMutations,
   rootDir = process.cwd(),
+  excludedPaths = [],
 }) {
   const problems = [];
   let schema;
@@ -290,18 +283,20 @@ export function deriveAutomaticRlsMutations({
   const claims = new Map();
   const evidence = new Map();
 
-  for (const traceFile of traceFiles(tracesDir)) {
-    let artifact;
-    try {
-      artifact = readJson(traceFile);
-    } catch (error) {
-      problems.push(
-        `${normalizePath(path.relative(rootDir, traceFile))} is not valid JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      continue;
-    }
+  let traces;
+  try {
+    traces = readTraceDirectory(tracesDir, { rootDir, excludedPaths });
+  } catch (error) {
+    return {
+      mutations: [],
+      claims: [],
+      evidence: [],
+      uncoveredActionClaims: [],
+      problems: [error.message],
+    };
+  }
+  for (const artifact of traces) {
+    const traceFile = path.join(tracesDir, `${artifact.proofId}.json`);
 
     // Aggregated mission traces and intentional red mutation traces are not
     // baseline evidence from which new mutations may be derived.

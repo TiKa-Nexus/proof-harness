@@ -296,6 +296,7 @@ export interface MissionManifest {
 // ---------------------------------------------------------------------------
 
 export type ValidationCategory =
+  | "trace_shape"
   | "capability_missing"
   | "capability_mismatch"
   | "schema_missing"

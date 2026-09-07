@@ -19,12 +19,11 @@
 //
 // against the same artifacts regenerated from the PR's merge base. The
 // artifact generators are pure filesystem scripts, so the base side is rebuilt
-// by extracting the base tree (`git archive`) and running THAT checkout's own
-// generators — no database, no install, a few seconds.
+// by extracting the base tree (`git archive`) and running the installed harness
+// with the archived consumer configuration. Optional driftPrepare builds inputs.
 //
 // WHAT THIS IS NOT. Drift sees exactly what the scanners see, and no more. It
-// does NOT see: RLS policy predicates (USING / WITH CHECK bodies), column
-// types, constraints, or defaults; SQL grants, triggers, or function bodies;
+// does NOT see: column types, constraints, or defaults; SQL grants, triggers, or function bodies;
 // transitive dependency contents; or ordinary product behavior. "No drift"
 // means "no change on the proof-relevant derived surfaces", never "nothing
 // else changed" — behavior inside declared scope still merits review or a
@@ -72,7 +71,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Single source of truth for the facet vocabularies, shared with both mission
 // validators (which reject exactly what the standalone budget check below
@@ -90,10 +89,6 @@ const CAPABILITIES_PATH = CONFIG.artifacts.capabilities;
 const SCHEMA_PATH = CONFIG.artifacts.schema;
 const MISSION_PATH = CONFIG.mission.current;
 const OUTPUT_PATH = CONFIG.artifacts.drift;
-
-// Paths whose contents feed the derived artifacts. If none of them differ from
-// the base, there is nothing to regenerate or diff.
-const SOURCE_PATHS = CONFIG.driftSources;
 
 // ---------------------------------------------------------------------------
 // Diffing (pure — unit-tested directly)
@@ -282,7 +277,10 @@ export function diffSchema(baseArtifact, headArtifact) {
     // Enforcement covers a table change only when EVERY facet is declared,
     // so `columns_added` on a declared table never authorizes a policy edit.
     const facets = [];
-    if (baseTable.rls_classification !== headTable.rls_classification) {
+    if (
+      baseTable.rls_classification !== headTable.rls_classification ||
+      baseTable.rls_enabled !== headTable.rls_enabled
+    ) {
       facets.push("rls_classification_changed");
       notes.push(
         `rls_classification: ${baseTable.rls_classification} -> ${headTable.rls_classification}`,
@@ -301,7 +299,7 @@ export function diffSchema(baseArtifact, headArtifact) {
     // `TO authenticated` widens who a policy reaches without renaming it, and
     // may leave the coarse rls_classification untouched.
     const policyKey = (p) =>
-      `${p.name} FOR ${p.command} TO ${[...(p.roles ?? [])].sort().join(",") || "PUBLIC"}`;
+      `${p.name} FOR ${p.command} TO ${[...(p.roles ?? [])].sort().join(",") || "PUBLIC"} ${p.mode ?? "PERMISSIVE"} USING ${p.using ?? ""} CHECK ${p.check ?? ""}`;
     const policies = setDiff(
       (baseTable.policies ?? []).map(policyKey),
       (headTable.policies ?? []).map(policyKey),
@@ -564,13 +562,8 @@ export function resolveBase(explicit) {
   return null;
 }
 
-/**
- * Materialize the base tree and regenerate its proof artifacts using the base
- * checkout's OWN generator scripts (they are pure filesystem scripts with no
- * node_modules imports, so no install is needed). Returns the artifact set or
- * throws with a reason.
- */
-function generateBaseArtifacts(baseSha, tmpDir) {
+/** Materialize the base consumer and evaluate it with this installed harness. */
+async function generateBaseArtifacts(baseSha, tmpDir) {
   const tarPath = path.join(tmpDir, "base.tar");
   execFileSync("git", ["archive", "--format=tar", "-o", tarPath, baseSha], {
     stdio: ["ignore", "ignore", "pipe"],
@@ -581,31 +574,43 @@ function generateBaseArtifacts(baseSha, tmpDir) {
     stdio: ["ignore", "ignore", "pipe"],
   });
 
-  const generators = [
-    ["scripts/scan_proof_capabilities.mjs"],
-    ["scripts/aggregate_migrations.mjs", "--fresh"],
-    ["scripts/parse_proof_schema.mjs"],
-  ];
-  for (const [script, ...args] of generators) {
-    if (!fs.existsSync(path.join(treeDir, script))) {
-      throw new Error(`base commit has no ${script} — too old to diff against`);
+  // Use the installed harness on both trees so generator-version differences
+  // cannot masquerade as product drift. Rebase every configured path into
+  // the archived consumer; never run removed template-owned scripts.
+  const baseConfigPath = CONFIG.configPath
+    ? path.join(treeDir, path.relative(CONFIG.rootDir, CONFIG.configPath))
+    : undefined;
+  const baseConfig = await loadProofConfig({
+    cwd: treeDir,
+    configPath: baseConfigPath,
+  });
+  const relocated = { ...baseConfig, rootDir: treeDir };
+  for (const group of ["artifacts", "roots", "repository"]) {
+    for (const value of Object.values(relocated[group])) {
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (typeof item !== "string") continue;
+        const relative = path.relative(treeDir, path.resolve(treeDir, item));
+        if (relative.startsWith("..") || path.isAbsolute(relative))
+          throw new Error(`base ${group} path escapes archive: ${item}`);
+      }
     }
-    execFileSync("node", [script, ...args], {
-      cwd: treeDir,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
   }
-
+  const configFile = path.join(tmpDir, "base-proof.config.mjs");
+  fs.writeFileSync(configFile, `export default ${JSON.stringify(relocated)};`);
+  generateArtifacts(treeDir, configFile, relocated);
   return {
     capabilities: JSON.parse(
-      fs.readFileSync(path.join(treeDir, CAPABILITIES_PATH), "utf8"),
+      fs.readFileSync(
+        path.join(treeDir, relocated.artifacts.capabilities),
+        "utf8",
+      ),
     ),
     schema: JSON.parse(
-      fs.readFileSync(path.join(treeDir, SCHEMA_PATH), "utf8"),
+      fs.readFileSync(path.join(treeDir, relocated.artifacts.schema), "utf8"),
     ),
     pkg: JSON.parse(
       fs.readFileSync(
-        path.join(treeDir, CONFIG.repository.packageJson),
+        path.join(treeDir, relocated.repository.packageJson),
         "utf8",
       ),
     ),
@@ -615,6 +620,44 @@ function generateBaseArtifacts(baseSha, tmpDir) {
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
+
+function generateArtifacts(rootDir, configPath, config) {
+  const env = { ...process.env };
+  delete env.PROOF_HARNESS_CONFIG;
+  if (configPath) env.PROOF_HARNESS_CONFIG = configPath;
+  if (config.driftPrepare !== null && config.driftPrepare !== undefined) {
+    if (
+      !Array.isArray(config.driftPrepare) ||
+      !config.driftPrepare.length ||
+      config.driftPrepare.some((v) => typeof v !== "string" || !v)
+    )
+      throw new Error("driftPrepare must be a nonempty command argv array");
+    const [command, ...args] = config.driftPrepare;
+    execFileSync(command, args, {
+      cwd: rootDir,
+      env,
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 30_000,
+    });
+  } else if (
+    rootDir === CONFIG.rootDir &&
+    tryGit(["check-ignore", config.roots.migrations]) !== null
+  ) {
+    throw new Error(
+      "ignored migration inputs need a consumer-owned driftPrepare command to rebuild the archived base",
+    );
+  }
+  for (const name of [
+    "scan_proof_capabilities.mjs",
+    "parse_proof_schema.mjs",
+  ]) {
+    execFileSync(
+      process.execPath,
+      [fileURLToPath(new URL(name, import.meta.url))],
+      { cwd: rootDir, env, stdio: ["ignore", "ignore", "pipe"] },
+    );
+  }
+}
 
 function readJson(file, { hint } = {}) {
   if (!fs.existsSync(file)) {
@@ -738,7 +781,7 @@ function printEntries(entries) {
   for (const e of entries) row(e.area, e.key, e.change, e.severity, e.detail);
 }
 
-export function main() {
+export async function main() {
   const args = process.argv.slice(2);
   const asJson = args.includes("--json");
   const baseFlagIndex = args.indexOf("--base");
@@ -765,14 +808,6 @@ Without it, the report is informational. Writes ${OUTPUT_PATH}.`);
     console.error(`[proof:drift] unknown flag: ${unknown.join(", ")}`);
     process.exit(2);
   }
-
-  const headCapabilities = readJson(CAPABILITIES_PATH, {
-    hint: "run `pnpm proof:build` first — drift diffs the regenerated artifacts",
-  });
-  const headSchema = readJson(SCHEMA_PATH, {
-    hint: "run `pnpm proof:build` first — drift diffs the regenerated artifacts",
-  });
-  const headPkg = readJson(CONFIG.repository.packageJson, {});
 
   let base;
   try {
@@ -817,61 +852,35 @@ Without it, the report is informational. Writes ${OUTPUT_PATH}.`);
 
   const headSha = tryGit(["rev-parse", "HEAD"]);
 
-  // Lockfile drift is tracked separately from the package.json surface: a
-  // lockfile that changes while the dependency surface does not means the
-  // RESOLUTION changed (a swapped tarball, a widened range realized), which
-  // no package.json diff can see.
-  let lockfileChanged = false;
-  if (
-    fs.existsSync(CONFIG.repository.lockfile) ||
-    tryGit(["cat-file", "-e", `${base.sha}:${CONFIG.repository.lockfile}`]) !==
-      null
-  ) {
-    try {
-      execFileSync(
-        "git",
-        ["diff", "--quiet", base.sha, "--", CONFIG.repository.lockfile],
-        { stdio: "ignore" },
-      );
-    } catch {
-      lockfileChanged = true;
-    }
-  }
+  const lockfilePath = path.relative(
+    CONFIG.rootDir,
+    path.resolve(CONFIG.repository.lockfile),
+  );
+  const baseLockfile = tryGit(["show", `${base.sha}:${lockfilePath}`]);
+  const headLockfile = fs.existsSync(CONFIG.repository.lockfile)
+    ? fs.readFileSync(CONFIG.repository.lockfile, "utf8").trim()
+    : null;
+  const lockfileChanged = baseLockfile !== headLockfile;
 
-  // Fast path: when nothing feeding the artifacts differs from the base
-  // (committed or not), there is no drift and no need to rebuild anything.
-  let sourceUnchanged = false;
+  // Always regenerate. Git diff alone omits untracked action and SQL files.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "proof-drift-"));
+  let entries;
   try {
-    execFileSync("git", ["diff", "--quiet", base.sha, "--", ...SOURCE_PATHS], {
-      stdio: "ignore",
-    });
-    sourceUnchanged = true;
-  } catch {
-    sourceUnchanged = false;
-  }
-
-  let entries = [];
-  if (!sourceUnchanged) {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "proof-drift-"));
-    let baseArtifacts;
-    try {
-      baseArtifacts = generateBaseArtifacts(base.sha, tmpDir);
-    } catch (err) {
-      notAssessed(
-        `could not rebuild base artifacts at ${base.sha.slice(0, 12)}: ${err.message}`,
-      );
-      return;
-    } finally {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    }
+    generateArtifacts(CONFIG.rootDir, CONFIG.configPath, CONFIG);
+    const baseArtifacts = await generateBaseArtifacts(base.sha, tmpDir);
     entries = buildDrift({
       baseCapabilities: baseArtifacts.capabilities,
-      headCapabilities,
+      headCapabilities: readJson(CAPABILITIES_PATH),
       baseSchema: baseArtifacts.schema,
-      headSchema,
+      headSchema: readJson(SCHEMA_PATH),
       basePkg: baseArtifacts.pkg,
-      headPkg,
+      headPkg: readJson(CONFIG.repository.packageJson),
     });
+  } catch (err) {
+    notAssessed(`could not regenerate proof surfaces: ${err.message}`);
+    return;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 
   if (lockfileChanged) {
@@ -976,5 +985,8 @@ const isDirectInvocation =
   import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isDirectInvocation) {
-  main();
+  main().catch((error) => {
+    console.error(`[PROOF_FAIL] drift_unassessed: ${error.message}`);
+    process.exitCode = 1;
+  });
 }

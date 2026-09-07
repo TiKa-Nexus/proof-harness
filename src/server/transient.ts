@@ -133,9 +133,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * RPC — including the ad-hoc ones written inside proof specs, which is the whole
  * reason the retry lives here instead of at the call sites.
  *
- * Retrying a write is safe here only because gateway failures mean the request
- * did not reach PostgREST; a request carrying a stream body is never retried,
- * since it cannot be replayed and we cannot know how far it got.
+ * Only GET and HEAD are retried. A gateway error or lost response does not
+ * establish that a write was never applied; replaying POST/RPC could duplicate it.
  */
 export function createRetryingFetch(
   label: string,
@@ -143,10 +142,11 @@ export function createRetryingFetch(
   { maxAttempts = TRANSIENT_MAX_ATTEMPTS } = {},
 ): typeof fetch {
   return async (input, init) => {
+    const method = (
+      init?.method ?? (input instanceof Request ? input.method : "GET")
+    ).toUpperCase();
     const replayable =
-      init?.body == null ||
-      typeof init.body === "string" ||
-      init.body instanceof URLSearchParams;
+      (method === "GET" || method === "HEAD") && init?.body == null;
 
     for (let attempt = 1; ; attempt++) {
       const lastAttempt = attempt >= maxAttempts || !replayable;

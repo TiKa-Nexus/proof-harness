@@ -430,3 +430,11 @@ describe("assert.tenantIsolation fixture safety", () => {
     ]);
   });
 });
+
+it("fails visibly when fixture cleanup fails", async () => {
+  deleteWorkspace.mockRejectedValueOnce(new Error("cleanup failed"));
+  await expect(
+    proofAssert.tenantIsolation({ table: "widgets", setup: async () => {} }),
+  ).rejects.toThrow(/fixture_cleanup/);
+  expect(deleteUser).toHaveBeenCalledTimes(2);
+});

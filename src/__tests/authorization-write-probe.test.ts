@@ -36,7 +36,7 @@ interface QueryCall {
 interface QueryResult {
   data?: unknown[] | null;
   count?: number | null;
-  error?: { message: string } | null;
+  error?: { message: string; code?: string } | null;
   status?: number;
 }
 
@@ -213,7 +213,10 @@ describe("assert.authorization — write verdicts once the target is visible", (
     actorResponder = (call) =>
       call.op === "select"
         ? { data: [ROW], count: 1 }
-        : { error: { message: "permission denied" }, status: 403 };
+        : {
+            error: { message: "permission denied", code: "42501" },
+            status: 403,
+          };
 
     await assert.authorization({
       actor: "admin",
@@ -261,7 +264,10 @@ describe("assert.authorization — write verdicts once the target is visible", (
     actorResponder = (call) =>
       call.op === "select"
         ? { data: [ROW], count: 1 }
-        : { error: { message: "permission denied" }, status: 403 };
+        : {
+            error: { message: "permission denied", code: "42501" },
+            status: 403,
+          };
 
     await assert.authorization({
       actor: "admin",
@@ -272,11 +278,19 @@ describe("assert.authorization — write verdicts once the target is visible", (
     expect(primary()).toMatchObject({ role: "primary", passed: true });
   });
 
-  it("leaves INSERT probes alone — an insert reads no existing row", async () => {
+  it("validates an INSERT payload with a service-role control", async () => {
     // Nothing to be blind to, so no control is required and none is recorded.
-    serviceResponder = () => ({ data: [], count: 0 });
+    let inserted = false;
+    serviceResponder = (call) => {
+      if (call.op === "insert") inserted = true;
+      if (call.op === "delete") inserted = false;
+      return { data: [], count: inserted ? 1 : 0 };
+    };
     actorResponder = () => ({
-      error: { message: "new row violates row-level security policy" },
+      error: {
+        message: "new row violates row-level security policy",
+        code: "42501",
+      },
       status: 403,
     });
 
@@ -289,7 +303,77 @@ describe("assert.authorization — write verdicts once the target is visible", (
       },
     });
 
-    expect(control()).toBeUndefined();
+    expect(control()).toMatchObject({ passed: true, role: "control" });
     expect(primary()).toMatchObject({ role: "primary", passed: true });
   });
+});
+
+it("detects an UPDATE that moves the row out of its original filter", async () => {
+  let row = { ...ROW };
+  serviceResponder = (call) => ({
+    data: Object.entries(call.filter).every(
+      ([key, value]) => row[key as keyof typeof row] === value,
+    )
+      ? [row]
+      : [],
+    count: 1,
+  });
+  actorResponder = (call) => {
+    if (call.op === "update") row = { ...row, ...call.payload };
+    return { data: [row], count: 1 };
+  };
+  await expect(
+    assert.authorization({
+      actor: "member",
+      rls: {
+        table: "audit_logs",
+        op: "update",
+        filter: { outcome: "success" },
+        payload: { outcome: "failure" },
+      },
+    }),
+  ).rejects.toThrow(/authorization/);
+  expect(primary()).toMatchObject({ passed: false });
+});
+it("rejects a no-op UPDATE before attempting it", async () => {
+  serviceResponder = () => ({ data: [ROW], count: 1 });
+  await expect(
+    assert.authorization({
+      actor: "member",
+      rls: {
+        table: "audit_logs",
+        op: "update",
+        filter: { id: ROW.id },
+        payload: { outcome: ROW.outcome },
+      },
+    }),
+  ).rejects.toThrow(/vacuous/);
+  expect(calls.some((c) => c.op === "update")).toBe(false);
+});
+it.each(["23505", "23502", "22P02", "PGRST204"])(
+  "does not count unrelated database error %s as INSERT denial",
+  async (code) => {
+    serviceResponder = () => ({ data: [], count: 0 });
+    actorResponder = () => ({ error: { code, message: "invalid write" } });
+    await expect(
+      assert.authorization({
+        actor: "member",
+        rls: { table: "audit_logs", op: "insert", payload: { id: "new-row" } },
+      }),
+    ).rejects.toThrow(/incomplete/);
+    expect(primary()?.passed).not.toBe(true);
+  },
+);
+
+it("rejects empty HTTP expectations before making a request", async () => {
+  const page = { request: { get: vi.fn() } };
+  await expect(
+    assert.httpResponse({
+      page: page as never,
+      path: "/",
+      kind: "happy_path",
+      expect: {},
+    }),
+  ).rejects.toThrow(/empty expectations/);
+  expect(page.request.get).not.toHaveBeenCalled();
 });

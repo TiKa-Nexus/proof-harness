@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readTraceDirectory, baselineAssertions } from "../../dist/node.js";
 // ---------------------------------------------------------------------------
 // proof_coverage.mjs
 //
@@ -57,7 +58,7 @@ import {
   TENANT_ISOLATION_ACTION_HELPERS,
   TENANT_ISOLATION_TABLE_HELPERS,
 } from "../../dist/portable-vocabulary.js";
-import { loadProofConfig } from "../config.mjs";
+import { loadProofConfig, evidenceExclusions } from "../config.mjs";
 
 const CONFIG = await loadProofConfig();
 process.chdir(CONFIG.rootDir);
@@ -121,22 +122,11 @@ function readJson(file, { required = true } = {}) {
 
 /** Every assertion from every trace, flattened. Steps may nest assertions. */
 function readAssertions() {
-  if (!fs.existsSync(TRACES_DIR)) return [];
-  const out = [];
-  for (const file of fs.readdirSync(TRACES_DIR)) {
-    if (!file.endsWith(".json")) continue;
-    const parsed = readJson(path.join(TRACES_DIR, file));
-    for (const artifact of Array.isArray(parsed) ? parsed : [parsed]) {
-      // The aggregate <missionId>.json embeds every per-spec trace; skip it so
-      // assertions are not counted twice.
-      if (Array.isArray(artifact?.traces)) continue;
-      const nested = (artifact?.steps ?? []).flatMap((s) => s.assertions ?? []);
-      for (const assertion of [...(artifact?.assertions ?? []), ...nested]) {
-        out.push({ ...assertion, proofId: artifact?.proofId ?? null });
-      }
-    }
-  }
-  return out;
+  return baselineAssertions(
+    readTraceDirectory(TRACES_DIR, {
+      excludedPaths: evidenceExclusions(CONFIG),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +192,10 @@ function buildReport() {
   const policy = readJson(POLICY_PATH, { required: false }) ?? {
     acceptedGaps: [],
   };
+  if (schema.assessed === false || capabilities.unclassified?.length)
+    throw new Error(
+      "[PROOF_FAIL] discovery_unassessed: schema or capability discovery is incomplete",
+    );
   const assertions = readAssertions();
 
   const tableNames = new Set((schema.tables ?? []).map((t) => t.name));

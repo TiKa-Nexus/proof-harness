@@ -1,3 +1,8 @@
+import {
+  ASSERTION_HELPERS,
+  assertionPassed,
+  traceShapeIssues,
+} from "./evidence";
 // ---------------------------------------------------------------------------
 // Mission manifest validator.
 //
@@ -91,6 +96,7 @@ export interface SchemaPolicy {
 }
 
 export interface SchemaArtifact {
+  assessed?: boolean;
   schemaVersion: number;
   tables: Array<{
     name: string;
@@ -280,9 +286,44 @@ function shapeIssues(manifest: unknown): ValidationIssue[] {
     });
   }
 
+  const fields = {
+    capabilities_must_exist: ["name", "module", "object"],
+    schema_must_contain: ["table"],
+    trace_must_prove: ["target", "description"],
+    policies_must_not_allow: ["table", "role", "description"],
+  } as const;
+  for (const [key, names] of Object.entries(fields)) {
+    const entries = (req as unknown as Record<string, unknown>)[key];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (
+        !entry ||
+        typeof entry !== "object" ||
+        names.some((name) => !isNonEmptyString(entry[name]))
+      ) {
+        issues.push({
+          category: "manifest_shape",
+          message: `${key} contains an invalid entry`,
+        });
+      } else if (
+        key === "schema_must_contain" &&
+        (!Array.isArray(entry.required_columns) ||
+          !entry.required_columns.every(isNonEmptyString))
+      ) {
+        issues.push({
+          category: "manifest_shape",
+          message: "required_columns must be an array of column names",
+        });
+      }
+    }
+  }
+  if (issues.length) return issues;
+
   // Vocabulary checks (best-effort — don't fail if fields are missing since
   // shape errors above will already have been reported).
-  for (const cap of req.capabilities_must_exist ?? []) {
+  for (const cap of Array.isArray(req.capabilities_must_exist)
+    ? req.capabilities_must_exist
+    : []) {
     if (!isProofVerb((cap as { verb?: unknown }).verb)) {
       issues.push({
         category: "manifest_shape",
@@ -290,7 +331,9 @@ function shapeIssues(manifest: unknown): ValidationIssue[] {
       });
     }
   }
-  for (const s of req.schema_must_contain ?? []) {
+  for (const s of Array.isArray(req.schema_must_contain)
+    ? req.schema_must_contain
+    : []) {
     if (
       !isRlsClassification(
         (s as { rls_classification?: unknown }).rls_classification,
@@ -302,7 +345,9 @@ function shapeIssues(manifest: unknown): ValidationIssue[] {
       });
     }
   }
-  for (const t of req.trace_must_prove ?? []) {
+  for (const t of Array.isArray(req.trace_must_prove)
+    ? req.trace_must_prove
+    : []) {
     if (!isProofKind((t as { kind?: unknown }).kind)) {
       issues.push({
         category: "manifest_shape",
@@ -531,6 +576,7 @@ function checkPolicies(
  * spec that satisfied it.
  */
 export interface AttributedAssertion extends TraceAssertion {
+  eligible?: boolean;
   proofId: string;
   specFile?: string;
 }
@@ -543,6 +589,7 @@ export function collectAssertions(bundle: TraceBundle): AttributedAssertion[] {
       for (const a of step.assertions ?? []) {
         out.push({
           ...a,
+          eligible: trace.passed && step.passed && !trace.mutation,
           proofId: trace.proofId,
           ...(trace.specFile ? { specFile: trace.specFile } : {}),
         });
@@ -609,10 +656,11 @@ function checkTraces(
     const originSatisfied = (a: TraceAssertion) =>
       requiredOrigin === "any" ||
       (typeof a.emittedBy === "string" &&
-        (allowedHelpers === null || allowedHelpers.includes(a.emittedBy)));
+        (allowedHelpers ?? ASSERTION_HELPERS).includes(a.emittedBy));
     const match = candidates.find(
       (a) =>
-        a.passed === true &&
+        a.eligible !== false &&
+        assertionPassed(a) &&
         normalizeAssertionRole(a.role) === requiredRole &&
         originSatisfied(a),
     );
@@ -727,6 +775,35 @@ export function validateMission(input: ValidateMissionInput): ValidationResult {
     };
   }
 
+  const evidenceIssues = Array.isArray(input.traces)
+    ? input.traces.flatMap((t) => traceShapeIssues(t))
+    : ["trace_shape: trace bundle must be an array"];
+  if (!evidenceIssues.length && new Set(input.traces.map((t) => t.proofId)).size !== input.traces.length)
+    evidenceIssues.push("duplicate_proof_id");
+  if (evidenceIssues.length)
+    return {
+      missionId: (input.manifest as MissionManifest).missionId,
+      ok: false,
+      issues: evidenceIssues.map((message) => ({
+        category: "trace_shape" as const,
+        message,
+      })),
+    };
+  if (
+    input.schema.assessed === false ||
+    input.capabilities.unclassified?.length
+  )
+    return {
+      missionId: (input.manifest as MissionManifest).missionId,
+      ok: false,
+      issues: [
+        {
+          category: "manifest_shape",
+          message:
+            "discovery_unassessed: regenerate complete schema and capability artifacts",
+        },
+      ],
+    };
   const manifest = input.manifest as MissionManifest;
   const traceResult = checkTraces(manifest, input.traces, input.schema);
   const issues: ValidationIssue[] = [

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 // Import External Packages
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -66,7 +67,15 @@ function fixture({
     ],
   });
   write(".proof/capabilities.json", { schemaVersion: 1, capabilities });
+  fs.mkdirSync(path.join(dir, "e2e/proofs"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "e2e/proofs/widgets.proof.ts"), "// fixture");
   write(".proof/traces/widgets.json", {
+    specFile: "e2e/proofs/widgets.proof.ts",
+    specHash: crypto
+      .createHash("sha256")
+      .update("// fixture")
+      .digest("hex")
+      .slice(0, 12),
     schemaVersion: 2,
     proofId: "widgets",
     timestamp: "2026-08-15T00:00:00.000Z",

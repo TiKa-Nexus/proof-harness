@@ -269,6 +269,7 @@ function parsePolicies(sql, sourceFile) {
       name: policyName,
       table: tableName,
       command,
+      mode: /\bAS\s+RESTRICTIVE\b/i.test(rest) ? "RESTRICTIVE" : "PERMISSIVE",
       roles,
       using: usingBody.trim(),
       check: checkBody.trim(),
@@ -308,7 +309,7 @@ function policyIndicatesUser(policy) {
 }
 
 function policyIsPublicRead(policy) {
-  if (policy.command !== "SELECT" && policy.command !== "ALL") return false;
+  if (policy.command !== "SELECT") return false;
   const body = policy.using.trim().toLowerCase();
   return body === "true";
 }
@@ -348,9 +349,7 @@ function classifyTable(policies) {
   if (
     readPolicies.length > 0 &&
     readPolicies.every(policyIsPublicRead) &&
-    authPolicies.every(
-      (p) => p.command === "SELECT" || p.command === "ALL" || p.check === "",
-    )
+    authPolicies.every((p) => p.command === "SELECT")
   ) {
     return "public_read";
   }
@@ -366,6 +365,26 @@ function classifyTable(policies) {
 
 export function main() {
   const sources = readAllMigrations();
+  const unsupported = [];
+  const enabledTables = new Set();
+  for (const { file, sql } of sources) {
+    // This parser is intentionally conservative. Never preserve historical CREATE
+    // facts as current evidence after an operation we cannot interpret.
+    const enable =
+      /ALTER\s+TABLE\s+(?:ONLY\s+)?(?:"?public"?\.)?"?(\w+)"?\s+ENABLE\s+ROW\s+LEVEL\s+SECURITY\s*;/gi;
+    for (const match of sql.matchAll(enable)) enabledTables.add(match[1]);
+    const remainder = sql.replace(enable, "");
+    if (
+      /\b(?:ALTER\s+(?:TABLE|POLICY)|DROP\s+(?:TABLE|POLICY)|DO\s+\$|EXECUTE\s+)/i.test(
+        remainder,
+      )
+    )
+      unsupported.push({
+        file,
+        reason:
+          "migration changes schema or policy state using unsupported SQL; final schema is unassessable",
+      });
+  }
   const tablesByName = new Map();
   const policiesByTable = new Map();
 
@@ -373,7 +392,10 @@ export function main() {
     for (const t of extractTables(sql, file)) {
       const existing = tablesByName.get(t.name);
       if (existing) {
-        // Merge columns from ALTER TABLE or re-declarations (future-proof).
+        unsupported.push({
+          file,
+          reason: `repeated CREATE TABLE ${t.name} cannot establish final columns`,
+        });
         existing.columns = [...new Set([...existing.columns, ...t.columns])];
         if (!existing.files.includes(file)) existing.files.push(file);
       } else {
@@ -395,17 +417,23 @@ export function main() {
 
   for (const [name, entry] of tablesByName) {
     const policies = policiesByTable.get(name) ?? [];
-    const classification = classifyTable(policies);
+    const classification = enabledTables.has(name)
+      ? classifyTable(policies)
+      : "unclassified";
 
     const normalized = {
       name,
       columns: [...entry.columns].sort(),
       rls_classification: classification,
+      rls_enabled: enabledTables.has(name),
       policies: policies
         .map((p) => ({
           name: p.name,
           command: p.command,
           roles: [...p.roles].sort(),
+          using: p.using,
+          check: p.check,
+          mode: p.mode,
         }))
         .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
       sourceFiles: [...entry.files]
@@ -429,6 +457,8 @@ export function main() {
 
   const output = {
     schemaVersion: 1,
+    assessed: unsupported.length === 0,
+    issues: unsupported,
     tables,
     unclassified: unclassifiedTables,
   };
@@ -439,6 +469,10 @@ export function main() {
   console.log(
     `[proof:parse] parsed ${sources.length} migration file(s); wrote ${tables.length} table(s), ${unclassifiedTables.length} unclassified to ${OUTPUT_PATH}`,
   );
+  if (unsupported.length)
+    throw new Error(
+      `[PROOF_FAIL] schema_unassessed: ${unsupported.map((p) => `${p.file}: ${p.reason}`).join("; ")}`,
+    );
   if (unclassifiedTables.length > 0) {
     console.log(`[proof:parse] unclassified tables:`);
     for (const u of unclassifiedTables)

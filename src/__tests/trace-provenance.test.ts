@@ -1,5 +1,7 @@
 // Import External Packages
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -164,4 +166,85 @@ describe("assertion provenance", () => {
     const assertion = readArtifact("context-wins").steps[0]?.assertions?.[0];
     expect(assertion?.emittedBy).toBe("assert.authorization");
   });
+});
+
+it.each([undefined, null, false, 0, ""])(
+  "records and rethrows falsy failures (%s)",
+  async (error) => {
+    let caught = false;
+    try {
+      await trace.proof("falsy", async () => {
+        throw error;
+      });
+    } catch {
+      caught = true;
+    }
+    expect(caught).toBe(true);
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(dir, ".proof/traces/falsy.json"), "utf8"),
+      ).passed,
+    ).toBe(false);
+  },
+);
+it("fails the proof when a callback records failure without throwing", async () => {
+  await expect(
+    trace.proof("recorded", async (t) => {
+      await t.step(
+        { kind: "happy_path", target: "widgets", intent: "observe" },
+        async () => {
+          recordAssertion({
+            kind: "happy_path",
+            target: "widgets",
+            passed: false,
+          });
+        },
+      );
+    }),
+  ).rejects.toThrow(/recorded assertions failed/);
+});
+it("rejects duplicate proof IDs without overwriting the first artifact", async () => {
+  await trace.proof("duplicate", async () => {});
+  const file = path.join(dir, ".proof/traces/duplicate.json");
+  const first = fs.readFileSync(file, "utf8");
+  await expect(trace.proof("duplicate", async () => {})).rejects.toThrow(
+    /duplicate_proof_id/,
+  );
+  expect(fs.readFileSync(file, "utf8")).toBe(first);
+});
+it("honors configured and runner-overridden trace paths", () => {
+  fs.writeFileSync(
+    path.join(dir, "proof.config.mjs"),
+    'export default {artifacts:{traces:"evidence/output"}};',
+  );
+  const writer = pathToFileURL(
+    path.join(previousCwd, "dist/playwright.js"),
+  ).href;
+  const run = (id: string, output?: string) =>
+    spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `import {trace} from ${JSON.stringify(writer)}; await trace.proof(${JSON.stringify(id)},async () => {});`,
+      ],
+      {
+        cwd: dir,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ...(output ? { PROOF_TRACES_DIR: output } : {}),
+        },
+      },
+    );
+  const configured = run("configured");
+  expect(configured.status, configured.stderr).toBe(0);
+  expect(fs.existsSync(path.join(dir, "evidence/output/configured.json"))).toBe(
+    true,
+  );
+  const overridden = run("overridden", path.join(dir, "runner-output"));
+  expect(overridden.status, overridden.stderr).toBe(0);
+  expect(fs.existsSync(path.join(dir, "runner-output/overridden.json"))).toBe(
+    true,
+  );
 });

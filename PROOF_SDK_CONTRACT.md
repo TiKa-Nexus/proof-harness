@@ -10,7 +10,7 @@ instead; this document is for anyone _consuming_ the template.
 > **"Manifest" in this document always means the _mission_ manifest**
 > (`.proof/current-mission.json`) — the file that pins what one PR must prove.
 
-- **Version:** 1 (`schemaVersion` in every manifest and artifact)
+- **Versions:** mission manifests 1; proof traces 2; proof health protocol 1.
 - **Stability:** The shapes in this document are the contract. Additive
   changes (new optional fields, new vocabulary entries) do not bump the
   version; breaking changes bump `schemaVersion` and are documented here.
@@ -21,6 +21,17 @@ instead; this document is for anyone _consuming_ the template.
   pre-commit hook; that is no longer true.
 
 ---
+
+## Current acceptance semantics
+
+The unreleased audit hardening in [COMPATIBILITY.md](COMPATIBILITY.md#unreleased-audit-hardening)
+supersedes older template-specific command examples below. Trace consumers
+must use `decodeTrace`/`decodeTraceBundle` for structural validation and
+`readTraceDirectory` for CLI-equivalent freshness checks. Evidence counts only
+when the proof and step passed, the assertion has a passing consistent verdict,
+and the trace is a baseline rather than a planted mutation. Helper-origin
+metadata is a convention enforced by the writer, not cryptographic attestation.
+The consumer controls and protects the runner and its trust inputs.
 
 ## 1. The loop
 
@@ -47,7 +58,7 @@ instead; this document is for anyone _consuming_ the template.
 │             │    fails cheaply BEFORE the database proofs run        │
 │             ├─ proof:verify                                          │
 │                 ├─ runs every *.proof.ts spec                        │
-│                 ├─ aggregates  .proof/traces/<missionId>.json        │
+│                 ├─ aggregates  .proof/traces/missions/<missionId>.json        │
 │                 └─ validates manifest requirements against artifacts │
 │             ├─ proof:coverage --strict                               │
 │             └─ proof:inventory → requires mutation or acceptance      │

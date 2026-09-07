@@ -31,8 +31,17 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import nextEnv from "@next/env";
 
-import { validateMission } from "../../dist/node.js";
-import { loadProofConfig } from "../config.mjs";
+import {
+  validateMission,
+  readTraceDirectory,
+  isArtifactId,
+  sourceHash,
+} from "../../dist/node.js";
+import {
+  loadProofConfig,
+  evidenceExclusions,
+  assertArtifactDirectory,
+} from "../config.mjs";
 
 const CONFIG = await loadProofConfig();
 process.chdir(CONFIG.rootDir);
@@ -176,7 +185,7 @@ async function existingProofServerIssue() {
   }
 }
 
-async function runProofs(provenance) {
+async function runProofs(provenance, tracesDir) {
   console.log("[proof:verify] running Playwright proofs project…");
   return new Promise((resolve) => {
     const playwrightArgs = [
@@ -197,6 +206,10 @@ async function runProofs(provenance) {
       env: {
         ...process.env,
         CI: process.env.CI ?? "",
+        PROOF_TRACES_DIR: path.resolve(tracesDir),
+        ...(provenance.sourceHash
+          ? { PROOF_SOURCE_HASH: provenance.sourceHash }
+          : {}),
         // Resolved once here and passed down so every trace in a run agrees
         // about the code it observed. Left unset rather than blank when
         // unknown, since the SDK reads absence as "ask git yourself".
@@ -255,25 +268,9 @@ function readArtifactsOrFail() {
 }
 
 function readTraces(tracesDir) {
-  if (!fs.existsSync(tracesDir)) return [];
-  const files = fs
-    .readdirSync(tracesDir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith(".json"))
-    .map((e) => path.join(tracesDir, e.name))
-    .sort();
-  const traces = [];
-  for (const f of files) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(f, "utf8"));
-      // Skip aggregated mission traces; they have `proofs` not `steps`.
-      if (parsed && Array.isArray(parsed.steps)) traces.push(parsed);
-    } catch (err) {
-      console.error(
-        `[proof:verify] failed to parse trace ${f}: ${err.message}`,
-      );
-    }
-  }
-  return traces;
+  return readTraceDirectory(tracesDir, {
+    excludedPaths: evidenceExclusions(CONFIG),
+  });
 }
 
 /**
@@ -284,13 +281,17 @@ function readTraces(tracesDir) {
  * top-level JSON files; clearing those is sufficient to make a run fresh while
  * leaving unrelated files and nested directories untouched.
  */
-function clearTraceArtifacts(tracesDir) {
-  if (!fs.existsSync(tracesDir)) return 0;
+export function clearTraceArtifacts(tracesDir) {
+  const directory = path.resolve(tracesDir);
+  assertArtifactDirectory(directory, CONFIG.rootDir);
+  if (!fs.existsSync(directory)) return 0;
+  // Validate the entire directory before removing anything. Unknown JSON is never ours.
+  readTraceDirectory(directory, { checkFreshness: false });
   let removed = 0;
-  for (const entry of fs.readdirSync(tracesDir, { withFileTypes: true })) {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-    fs.unlinkSync(path.join(tracesDir, entry.name));
-    removed += 1;
+    fs.unlinkSync(path.join(directory, entry.name));
+    removed++;
   }
   return removed;
 }
@@ -304,7 +305,7 @@ function clearTraceArtifacts(tracesDir) {
  * usable artifact, so a missing SHA degrades the evidence rather than failing
  * the run.
  */
-function runProvenance() {
+function runProvenance(tracesDir) {
   const git = (args) => {
     const res = spawnSync("git", args, { encoding: "utf8" });
     if (res.status !== 0) return undefined;
@@ -317,10 +318,18 @@ function runProvenance() {
 
   return {
     commit,
+    sourceHash: sourceHash(CONFIG.rootDir, [
+      ...evidenceExclusions(CONFIG),
+      tracesDir,
+    ]),
     branch,
     // Whether the working tree had uncommitted changes when the proof ran. A
     // green proof from a dirty tree does not describe any reviewable commit.
-    dirty: dirtyOutput === undefined ? undefined : dirtyOutput.length > 0,
+    dirty:
+      spawnSync("git", ["status", "--porcelain"], { encoding: "utf8" })
+        .status === 0
+        ? Boolean(dirtyOutput)
+        : undefined,
     repository:
       process.env.GITHUB_REPOSITORY ?? git(["remote", "get-url", "origin"]),
     ci: Boolean(process.env.CI),
@@ -358,7 +367,10 @@ function writeAggregatedTrace(
   manifest,
   outcome,
   provenance,
+  tracesDir,
 ) {
+  if (!isArtifactId(missionId))
+    throw new Error("[PROOF_FAIL] manifest_shape: invalid missionId");
   const aggregated = {
     schemaVersion: 1,
     missionId,
@@ -371,9 +383,10 @@ function writeAggregatedTrace(
     manifestSummary: {
       missionTitle: manifest.missionTitle,
       capabilities_must_exist:
-        manifest.requirements.capabilities_must_exist.length,
-      schema_must_contain: manifest.requirements.schema_must_contain.length,
-      trace_must_prove: manifest.requirements.trace_must_prove.length,
+        manifest.requirements?.capabilities_must_exist?.length ?? 0,
+      schema_must_contain:
+        manifest.requirements?.schema_must_contain?.length ?? 0,
+      trace_must_prove: manifest.requirements?.trace_must_prove?.length ?? 0,
     },
     // Present (possibly empty) on success; populated on failure with every
     // [PROOF_FAIL] the validator emitted, in the same structured shape.
@@ -402,8 +415,9 @@ function writeAggregatedTrace(
     })),
     traces: bundle,
   };
-  const outPath = path.join(TRACES_DIR_DEFAULT, `${missionId}.json`);
-  fs.mkdirSync(TRACES_DIR_DEFAULT, { recursive: true });
+  assertArtifactDirectory(tracesDir, CONFIG.rootDir);
+  const outPath = path.join(tracesDir, "missions", `${missionId}.json`);
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify(aggregated, null, 2) + "\n", "utf8");
   return outPath;
 }
@@ -434,7 +448,7 @@ export async function main() {
   // Read git once for the whole run: the specs are told what they are running
   // against, and the aggregate reports the same thing. Asking twice invites a
   // `dirty` flag that flips between the run and the summary.
-  const provenance = runProvenance();
+  const provenance = runProvenance(args.tracesDir);
 
   if (!args.noRun) {
     const serverIssue = await existingProofServerIssue();
@@ -450,7 +464,7 @@ export async function main() {
           `[proof:verify] cleared ${removed} previous trace artifact(s) before the run`,
         );
       }
-      const ok = await runProofs(provenance);
+      const ok = await runProofs(provenance, args.tracesDir);
       if (!ok) {
         // Continue to aggregation so users see trace-level issues too, but
         // remember that the run itself was red.
@@ -466,7 +480,11 @@ export async function main() {
   }
 
   const { capabilities, schema } = readArtifactsOrFail();
-  const traces = readTraces(args.tracesDir);
+  if (schema.assessed === false || capabilities.unclassified?.length)
+    throw new Error(
+      "[PROOF_FAIL] discovery_unassessed: regenerate complete artifacts",
+    );
+  const traces = readTraces(args.tracesDir).filter((trace) => !trace.mutation);
   const resolved = resolveManifest(args);
 
   // Zero traces means zero evidence. Reporting that as "0 proof(s) passed" and
@@ -578,6 +596,7 @@ export async function main() {
       evidence: result.evidence ?? [],
     },
     provenance,
+    args.tracesDir,
   );
 
   if (!result.ok) {

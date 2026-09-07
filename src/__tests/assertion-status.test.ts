@@ -30,14 +30,14 @@ function trace(assertions: TraceAssertion[]): TraceArtifact {
     proofId: "p1",
     timestamp: "2026-08-15T00:00:00.000Z",
     durationMs: 1,
-    passed: assertions.every((a) => a.passed),
+    passed: assertions.every((a) => a.passed || a.status === "skipped"),
     steps: [
       {
         intent: "probe",
         kind: "tenant_isolation",
         target: "notifications",
         observation: "",
-        passed: assertions.every((a) => a.passed),
+        passed: assertions.every((a) => a.passed || a.status === "skipped"),
         durationMs: 1,
         assertions,
       },

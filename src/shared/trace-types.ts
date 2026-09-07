@@ -292,6 +292,11 @@ export interface TraceArtifact {
    * could not be determined, which is not the same as `false`.
    */
   dirty?: boolean;
+  /** Hash of git-tracked and untracked nonignored source inputs. */
+  sourceHash?: string;
+  /** Writer identity for distinguishing retries from duplicate proof IDs. */
+  executionId?: string;
+  retry?: number;
   /**
    * Present only for intentional red runs produced by `proof:mutate`.
    * Stored inside the trace so provenance survives artifact renames/copies.

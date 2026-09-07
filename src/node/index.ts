@@ -10,3 +10,14 @@ export type {
   TraceBundle,
   ValidateMissionInput,
 } from "./validate-mission";
+
+export {
+  decodeTrace,
+  decodeTraceBundle,
+  traceShapeIssues,
+  readTraceDirectory,
+  baselineAssertions,
+  assertionPassed,
+  isArtifactId,
+} from "./evidence";
+export { sourceHash } from "./source-hash";
