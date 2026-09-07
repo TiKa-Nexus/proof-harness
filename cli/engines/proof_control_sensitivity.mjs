@@ -86,7 +86,10 @@ export function assertionSelectorsTurnedRed(
                 a.passed === false &&
                 decisive(a) &&
                 (role === "control" ? control(a) : primary(a)) &&
-                assertionHelpers.has(a.emittedBy) &&
+                // Primary inventory accepts explicit consumer assertions without
+                // helper provenance. Controls still require a recognized helper.
+                (assertionHelpers.has(a.emittedBy) ||
+                  (role === "primary" && a.emittedBy === undefined)) &&
                 matches(a, selector),
             ),
         ),

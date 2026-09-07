@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "proofId": "rpc-execute-denial",
+  "specFile": "e2e/proofs/rpc-execute.proof.ts",
+  "timestamp": "2026-09-07T00:00:00.000Z",
+  "durationMs": 1,
+  "passed": false,
+  "mutation": { "id": "C4-credit-drain", "planted": true },
+  "steps": [
+    {
+      "intent": "Authenticated callers cannot execute the credit deduction RPC",
+      "kind": "authorization",
+      "target": "deduct_workspace_credits",
+      "observation": "The authenticated invocation succeeded",
+      "durationMs": 1,
+      "passed": false,
+      "error": "[PROOF_FAIL] authorization: authenticated caller successfully executed deduct_workspace_credits",
+      "assertions": [
+        {
+          "kind": "authorization",
+          "target": "deduct_workspace_credits",
+          "operation": "invoke",
+          "passed": false,
+          "role": "primary",
+          "status": "failed",
+          "detail": "authenticated caller successfully executed deduct_workspace_credits — EXECUTE grant is too broad"
+        }
+      ]
+    }
+  ]
+}

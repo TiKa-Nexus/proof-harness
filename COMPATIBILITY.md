@@ -11,7 +11,7 @@ Consumers must pin an exact prerelease version, for example:
 ```json
 {
   "devDependencies": {
-    "proof-harness": "0.1.0-next.8"
+    "proof-harness": "0.1.0-next.9"
   }
 }
 ```
@@ -27,9 +27,32 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
-### 0.1.0-next.9 — anonymous actions and control sensitivity (release candidate)
+### 0.1.0-next.10 — explicit primary mutation evidence (release candidate)
 
 Prepared for release; not yet published. After publication, pin exactly
+`proof-harness@0.1.0-next.10` and rerun a fresh baseline before mutation checks.
+Trace, mission, and health protocol versions remain unchanged.
+
+This fixes #26: next.9 accidentally required SDK-helper provenance for primary
+mutation assertions, although primary inventory accepts explicit consumer
+assertions. A mapped, decisive failed `role: "primary"` assertion recorded by
+`recordAssertion` can again detect a mutation without `emittedBy`. An explicit
+selector restriction on `emittedBy` still applies. Control sensitivity continues
+to require recognized SDK-helper provenance; controls never detect primary
+mutations. Existing freshness, plant, failed-run, and restoration checks remain.
+
+No new RPC helper or provenance field is required. Do not supply or forge
+`emittedBy`: public `recordAssertion` deliberately strips it. Consumer proof
+specs and protected catalogs own the meaning of explicit primary assertions.
+For an RPC EXECUTE-denial proof, successful unauthorized execution should emit
+the mapped failed primary assertion. Unrelated SQL, transport, or setup errors
+must remain incomplete or emit no decisive failure; they are not evidence of
+the mapped breach. Tightening the consumer denial probe to accept only the
+expected SQLSTATE (for example, `42501`) remains consumer-owned work.
+
+### 0.1.0-next.9 — anonymous actions and control sensitivity
+
+Published release. Pin exactly
 `proof-harness@0.1.0-next.9` and regenerate capabilities and baseline traces.
 Trace/mission/health versions remain unchanged. Authentication refusal and
 control-sensitivity output contracts use protocol/schema version 1.
