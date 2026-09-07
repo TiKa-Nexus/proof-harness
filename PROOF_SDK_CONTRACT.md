@@ -24,7 +24,7 @@ instead; this document is for anyone _consuming_ the template.
 
 ## Current acceptance semantics
 
-The unreleased audit hardening in [COMPATIBILITY.md](COMPATIBILITY.md#unreleased-audit-hardening)
+The `0.1.0-next.7` audit hardening in [COMPATIBILITY.md](COMPATIBILITY.md#010-next7)
 supersedes older template-specific command examples below. Trace consumers
 must use `decodeTrace`/`decodeTraceBundle` for structural validation and
 `readTraceDirectory` for CLI-equivalent freshness checks. Evidence counts only

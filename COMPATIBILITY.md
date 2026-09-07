@@ -11,7 +11,7 @@ Consumers must pin an exact prerelease version, for example:
 ```json
 {
   "devDependencies": {
-    "proof-harness": "0.1.0-next.6"
+    "proof-harness": "0.1.0-next.7"
   }
 }
 ```
@@ -156,6 +156,11 @@ including immediate and deferred failures and catalog ALTER/DROP behavior.
 ### 0.1.0-next.7 — audit hardening
 
 Published release `0.1.0-next.7` tightens acceptance behavior. Trace
+<a id="unreleased-audit-hardening"></a>
+
+### 0.1.0-next.7
+
+Published September 7, 2026. This release tightens acceptance behavior. Trace
 schema remains 2, with additive source/execution identity fields. Version 1
 and unversioned trace shapes remain explicitly readable, but CLI acceptance
 requires current provenance. Required consumer changes:
