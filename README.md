@@ -101,9 +101,11 @@ See [required migration changes](COMPATIBILITY.md#010-next7--audit-hardening)
 before upgrading a consumer. In particular, existing traces must be rerun and
 unsupported SQL now blocks assessment.
 
-The unreleased follow-up adds a consumer-owned catalog provider for full SQL
-histories and transactional INSERT controls for append-only tables. See
-[compatibility and setup](COMPATIBILITY.md) before enabling either option.
+Release candidate `0.1.0-next.8` adds direct RLS client and Auth-admin discovery,
+a consumer-owned catalog provider for full SQL histories, and transactional
+INSERT controls for append-only tables. After publication, pin exactly
+`proof-harness@0.1.0-next.8`. See [compatibility and setup](COMPATIBILITY.md#010-next8)
+for the required consumer changes.
 
 The harness establishes specific tested claims. Acceptance still requires
 consumer-owned requirements and a trusted CI job that controls the harness,
