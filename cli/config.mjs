@@ -46,6 +46,8 @@ const DEFAULT_CONFIG = Object.freeze({
   // Optional consumer-owned argv used to prepare generated migration inputs
   // in both the working tree and the archived base before parsing.
   driftPrepare: null,
+  schemaProvider: null,
+  insertControl: null,
   driftSources: ["app", "package.json"],
   mutationCatalog: null,
 });

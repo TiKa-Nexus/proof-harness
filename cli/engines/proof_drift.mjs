@@ -279,11 +279,12 @@ export function diffSchema(baseArtifact, headArtifact) {
     const facets = [];
     if (
       baseTable.rls_classification !== headTable.rls_classification ||
-      baseTable.rls_enabled !== headTable.rls_enabled
+      baseTable.rls_enabled !== headTable.rls_enabled ||
+      Boolean(baseTable.rls_forced) !== Boolean(headTable.rls_forced)
     ) {
       facets.push("rls_classification_changed");
       notes.push(
-        `rls_classification: ${baseTable.rls_classification} -> ${headTable.rls_classification}`,
+        `RLS: ${baseTable.rls_classification} -> ${headTable.rls_classification}; enabled ${baseTable.rls_enabled} -> ${headTable.rls_enabled}; forced ${Boolean(baseTable.rls_forced)} -> ${Boolean(headTable.rls_forced)}`,
       );
     }
     const columns = setDiff(baseTable.columns, headTable.columns);
@@ -584,6 +585,10 @@ async function generateBaseArtifacts(baseSha, tmpDir) {
     cwd: treeDir,
     configPath: baseConfigPath,
   });
+  if (Boolean(baseConfig.schemaProvider) !== Boolean(CONFIG.schemaProvider))
+    throw new Error(
+      "schema provider adoption requires a preparatory base commit: register the provider and platform bootstrap in both trees before switching assessment modes; head configuration is never substituted for the base",
+    );
   const relocated = { ...baseConfig, rootDir: treeDir };
   for (const group of ["artifacts", "roots", "repository"]) {
     for (const value of Object.values(relocated[group])) {

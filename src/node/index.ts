@@ -21,3 +21,11 @@ export {
   isArtifactId,
 } from "./evidence";
 export { sourceHash } from "./source-hash";
+export {
+  withLocalPostgres,
+  readPostgresCatalog,
+  rollbackInsertControl,
+  quotePostgresIdentifier,
+} from "./postgres";
+
+export type { PostgresCatalogPolicy, PostgresCatalogTable } from "./postgres";

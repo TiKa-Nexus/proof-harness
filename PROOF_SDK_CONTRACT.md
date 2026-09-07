@@ -1221,3 +1221,17 @@ a trace version bump.
 `.proof/coverage-policy.json` carries its own `schemaVersion` (currently `1`).
 It is authored, not derived, and is read only by `pnpm proof:coverage`; consumers
 do not need to parse it.
+
+
+## Catalog provider and rollback controls (unreleased)
+
+The protected consumer config may opt into `schemaProvider` protocol 1 and
+`insertControl.mode: "rollback"`. See [the setup and migration contract](COMPATIBILITY.md)
+for the exact provider envelope, base-commit requirements, and control configuration.
+`proof-harness/node` exports `withLocalPostgres`, `readPostgresCatalog`,
+`rollbackInsertControl`, and the `PostgresCatalogTable`/`PostgresCatalogPolicy` types.
+Providers own database materialization; the harness validates catalog facts,
+classifies policies, binds source identity, and compares both trees. A rollback
+INSERT control is package-executed and can only record passing control evidence
+after its insert, deferred checks, rollback, and absence reread succeed. The
+original authenticated request remains the primary authorization assertion.

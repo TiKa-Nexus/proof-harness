@@ -23,7 +23,7 @@ pnpm add proof-harness@0.1.0-next.6
 The package exposes environment-specific entry points:
 
 - `proof-harness/shared` — portable types and vocabularies
-- `proof-harness/node` — Node mission validation helpers
+- `proof-harness/node` — Node mission validation and local PostgreSQL helpers
 - `proof-harness/playwright` — Playwright proof assertions and traces
 - `proof-harness/server` — server-side fixtures, guards, and service clients
 - `proof-harness/portable-vocabulary` — dependency-free runtime constants
@@ -92,14 +92,18 @@ The package is released from this public repository with npm provenance.
 Prerelease consumers must pin an exact version rather than using `next`, `^`, or
 `~`; see [COMPATIBILITY.md](./COMPATIBILITY.md) for the compatibility policy.
 
-## Audit hardening (0.1.0-next.7, unreleased)
+## Audit hardening (0.1.0-next.7)
 
-The working branch adds shared fail-closed trace ingestion, source freshness,
+This release adds shared fail-closed trace ingestion, source freshness,
 stronger authorization probes, isolated mutation evidence and interruption
 recovery, conservative discovery, and package-owned drift regeneration.
-See [required migration changes](COMPATIBILITY.md#unreleased-audit-hardening)
+See [required migration changes](COMPATIBILITY.md#010-next7--audit-hardening)
 before upgrading a consumer. In particular, existing traces must be rerun and
 unsupported SQL now blocks assessment.
+
+The unreleased follow-up adds a consumer-owned catalog provider for full SQL
+histories and transactional INSERT controls for append-only tables. See
+[compatibility and setup](COMPATIBILITY.md) before enabling either option.
 
 The harness establishes specific tested claims. Acceptance still requires
 consumer-owned requirements and a trusted CI job that controls the harness,
