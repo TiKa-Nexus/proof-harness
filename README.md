@@ -17,7 +17,7 @@ Public prereleases are published under the npm `next` tag. Pin an exact
 prerelease version while the API is stabilizing:
 
 ```sh
-pnpm add proof-harness@0.1.0-next.8
+pnpm add proof-harness@0.1.0-next.9
 ```
 
 The package exposes environment-specific entry points:
@@ -113,7 +113,11 @@ policies, and evidence. A passing trace is not a general proof of code quality
 or a defense against an executor that can rewrite the acceptance gate.
 
 
-Release candidate `0.1.0-next.9` adds isolated anonymous action probes and a
+Release `0.1.0-next.9` adds isolated anonymous action probes and a
 separate positive-control sensitivity runner. It also distinguishes caller
 workspace inputs from generated result IDs. See [next.9 setup and migration](COMPATIBILITY.md)
 before upgrading; consumer invoker and catalog changes are required.
+
+Release candidate `0.1.0-next.10` restores explicit consumer primary assertions
+for mutation detection while retaining strict control provenance. See the
+[next.10 migration notes](COMPATIBILITY.md) before adopting it after publication.

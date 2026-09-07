@@ -7,12 +7,16 @@ import { spawnSync } from "node:child_process";
 import { expect, it } from "vitest";
 
 it.each([
-  ["control", "tenant_isolation_control", true],
-  ["primary", "tenant_isolation_control", false],
-  ["control", "tenant_isolation_setup", false],
+  ["controls", "control", "tenant_isolation_control", "failed", true],
+  ["controls", "primary", "tenant_isolation_control", "failed", false],
+  ["controls", "control", "tenant_isolation_setup", "failed", false],
+  ["mutate", "primary", "authorization", "failed", true],
+  ["mutate", "control", "authorization", "failed", false],
+  ["mutate", "primary", "authorization_incomplete", "incomplete", false],
+  ["mutate", "primary", "setup", "failed", false],
 ] as const)(
-  "executes and restores a control-sensitivity plant: %s / %s",
-  async (role, code, accepted) => {
+  "executes and restores a mapped %s plant: %s / %s",
+  async (command, role, code, assertionStatus, accepted) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "proof-control-run-"));
     const write = (file: string, text: string) => {
       const target = path.join(root, file);
@@ -34,19 +38,27 @@ it.each([
       );
       write(
         "proof.config.mjs",
-        'export default {controlSensitivityCatalog:"controls.mjs"};',
+        'export default {mutationCatalog:"controls.mjs",controlSensitivityCatalog:"controls.mjs"};',
       );
       write("supabase/config.toml", 'project_id = "fixture"');
       write("src/guard.txt", "control allowed");
-      const selector = {
-        kind: "tenant_isolation",
-        target: "workspace_members",
-        operation: "select",
-        emittedBy: "assert.tenantIsolation",
-      };
+      write(".proof/schema.json", '{"schemaVersion":1,"tables":[]}');
+      const isPrimaryRun = command === "mutate";
+      const selector = isPrimaryRun
+        ? {
+            kind: "authorization",
+            target: "deduct_workspace_credits",
+            operation: "invoke",
+          }
+        : {
+            kind: "tenant_isolation",
+            target: "workspace_members",
+            operation: "select",
+            emittedBy: "assert.tenantIsolation",
+          };
       write(
         "controls.mjs",
-        `export default [${JSON.stringify({ id: "deny-all", spec: "e2e/proofs/control.proof.ts", finding: "anti-vacuity", breaks: "positive control denied", subject: { kind: "sourceFile", file: "src/guard.txt", search: "control allowed", replacement: "control denied" }, claims: [], controls: [selector], expectedFailureCode: "tenant_isolation_control" })}];`,
+        `export default [${JSON.stringify({ id: "deny-all", spec: "e2e/proofs/control.proof.ts", finding: "anti-vacuity", breaks: "positive control denied", subject: { kind: "sourceFile", file: "src/guard.txt", search: "control allowed", replacement: "control denied" }, claims: isPrimaryRun ? [selector] : [], controls: isPrimaryRun ? [] : [selector], expectedFailureCode: "tenant_isolation_control" })}];`,
       );
       write(
         "playwright.config.ts",
@@ -56,7 +68,7 @@ it.each([
 import fs from 'node:fs';import path from 'node:path';
 test('controlled trace fixture',()=>{
  expect(fs.readFileSync('src/guard.txt','utf8')).toBe('control denied');
- const trace={schemaVersion:2,proofId:'control',specFile:'e2e/proofs/control.proof.ts',timestamp:new Date().toISOString(),durationMs:1,passed:false,mutation:{id:process.env.PROOF_MUTATION_ID,planted:true},steps:[{intent:'control failure',kind:'tenant_isolation',target:'workspace_members',observation:'denied',durationMs:1,passed:false,error:'[PROOF_FAIL] ${code}: expected owner visibility',assertions:[${JSON.stringify({ ...selector, role, passed: false, status: "failed" })}]}]};
+ const trace={schemaVersion:2,proofId:'control',specFile:'e2e/proofs/control.proof.ts',timestamp:new Date().toISOString(),durationMs:1,passed:false,mutation:{id:process.env.PROOF_MUTATION_ID,planted:true},steps:[{intent:'control failure',kind:'${selector.kind}',target:'${selector.target}',observation:'denied',durationMs:1,passed:false,error:'[PROOF_FAIL] ${code}: expected owner visibility',assertions:${JSON.stringify(code === "setup" ? [] : [{ ...selector, role, passed: false, status: assertionStatus }])}}]};
  fs.mkdirSync(process.env.PROOF_TRACES_DIR,{recursive:true});fs.writeFileSync(path.join(process.env.PROOF_TRACES_DIR,'control.json'),JSON.stringify(trace));
  throw new Error('[PROOF_FAIL] ${code}: expected owner visibility');
 });`;
@@ -78,15 +90,15 @@ test('controlled trace fixture',()=>{
           steps: [
             {
               intent: "owner can read",
-              kind: "tenant_isolation",
-              target: "workspace_members",
+              kind: selector.kind,
+              target: selector.target,
               observation: "allowed",
               durationMs: 1,
               passed: true,
               assertions: [
                 {
                   ...selector,
-                  role: "control",
+                  role: isPrimaryRun ? "primary" : "control",
                   passed: true,
                   status: "passed",
                 },
@@ -104,12 +116,7 @@ test('controlled trace fixture',()=>{
       fs.chmodSync(path.join(root, "bin/pnpm"), 0o755);
       const run = spawnSync(
         process.execPath,
-        [
-          path.resolve("cli/proof-harness.mjs"),
-          "controls",
-          "--only",
-          "deny-all",
-        ],
+        [path.resolve("cli/proof-harness.mjs"), command, "--only", "deny-all"],
         {
           cwd: root,
           encoding: "utf8",
@@ -132,18 +139,35 @@ test('controlled trace fixture',()=>{
       ).toBe(false);
       const summary = JSON.parse(
         fs.readFileSync(
-          path.join(root, ".proof/control-sensitivity/summary.json"),
+          path.join(
+            root,
+            isPrimaryRun
+              ? ".proof/mutations/summary.json"
+              : ".proof/control-sensitivity/summary.json",
+          ),
           "utf8",
         ),
       );
       expect(summary.schemaVersion).toBe(1);
-      expect(summary.mode).toBe("control-sensitivity");
-      expect(summary.mutations).toBeUndefined();
-      expect(summary.controls[0]).toMatchObject({
-        detected: false,
-        controlRejected: accepted,
-      });
-      expect(fs.existsSync(path.join(root, ".proof/mutations"))).toBe(false);
+      if (isPrimaryRun) {
+        expect(summary.mode).toBe("primary-mutation");
+        expect(summary.controls).toBeUndefined();
+        expect(summary.mutations[0]).toMatchObject({
+          detected: accepted,
+          controlRejected: false,
+        });
+        expect(
+          fs.existsSync(path.join(root, ".proof/control-sensitivity")),
+        ).toBe(false);
+      } else {
+        expect(summary.mode).toBe("control-sensitivity");
+        expect(summary.mutations).toBeUndefined();
+        expect(summary.controls[0]).toMatchObject({
+          detected: false,
+          controlRejected: accepted,
+        });
+        expect(fs.existsSync(path.join(root, ".proof/mutations"))).toBe(false);
+      }
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

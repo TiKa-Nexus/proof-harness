@@ -1248,7 +1248,7 @@ coverage even without a workspace input. Changes use the existing
 supported factory/binding shapes and required consumer regeneration.
 
 
-## Anonymous invocations and control sensitivity (0.1.0-next.9 candidate)
+## Anonymous invocations and control sensitivity (0.1.0-next.9)
 
 The versioned anonymous refusal envelope is `ActionAuthenticationRefusal`
 (protocol 1), validated by `isActionAuthenticationRefusal` from the shared
@@ -1266,3 +1266,15 @@ count as primary mutation detection. The initial contract is limited to
 tenant-isolation SELECT anti-vacuity checks with `tenant_isolation_control`;
 see `COMPATIBILITY.md` for exact selectors, fresh baseline requirements and
 recovery. Consumer claims and product fixtures remain consumer-owned.
+
+## Explicit primary mutation evidence (0.1.0-next.10)
+
+Primary inventory and mutation detection accept explicit consumer assertions
+without `emittedBy`. Detection still requires a mapped, decisive failed primary
+assertion in a failed step and trace, plus the runner's baseline, plant, and
+failed-execution checks. Any selector requiring a specific `emittedBy` must
+still match it. A missing helper origin is not helper provenance: consumer
+specs and protected catalogs remain responsible for these assertions' meaning.
+Control sensitivity requires recognized SDK-helper provenance and cannot count
+as primary detection. Skipped, incomplete, and setup-only failures are not
+mapped decisive primary evidence. No trace protocol change is introduced.
