@@ -1,0 +1,14 @@
+{
+  "id": "TENANT-deny-all",
+  "spec": "e2e/proofs/tenant.proof.ts",
+  "claims": [],
+  "controls": [
+    {
+      "kind": "tenant_isolation",
+      "target": "workspace_members",
+      "operation": "select",
+      "emittedBy": "assert.tenantIsolation"
+    }
+  ],
+  "expectedFailureCode": "tenant_isolation_control"
+}

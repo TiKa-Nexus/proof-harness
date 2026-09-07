@@ -9,6 +9,7 @@ const DEFAULT_CONFIG = Object.freeze({
     traces: ".proof/traces",
     drift: ".proof/drift.json",
     mutations: ".proof/mutations",
+    controlSensitivity: ".proof/control-sensitivity",
   },
   // The module-descriptor system (module.meta.ts → modules.json and its
   // checker) moved to the consumer template in 0.1.0-next.6: it serves the
@@ -50,6 +51,7 @@ const DEFAULT_CONFIG = Object.freeze({
   insertControl: null,
   driftSources: ["app", "package.json"],
   mutationCatalog: null,
+  controlSensitivityCatalog: null,
 });
 
 function mergeConfig(config = {}) {

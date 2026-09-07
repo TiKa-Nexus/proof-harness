@@ -17,7 +17,7 @@ Public prereleases are published under the npm `next` tag. Pin an exact
 prerelease version while the API is stabilizing:
 
 ```sh
-pnpm add proof-harness@0.1.0-next.7
+pnpm add proof-harness@0.1.0-next.8
 ```
 
 The package exposes environment-specific entry points:
@@ -61,7 +61,7 @@ code via `allowProofServiceHosts`; there is deliberately no environment
 override.
 
 The package also provides one `proof-harness` executable with `scan`, `parse`,
-`registry`, `build`, `verify`, `coverage`, `inventory`, `drift`, and `mutate`
+`registry`, `build`, `verify`, `coverage`, `inventory`, `drift`, `mutate`, and `controls`
 subcommands. Commands read repository paths from
 `proof.config.mjs`; without one they use a conventional application layout.
 Product migration aggregation and explicit mutation definitions remain
@@ -101,9 +101,9 @@ See [required migration changes](COMPATIBILITY.md#010-next7--audit-hardening)
 before upgrading a consumer. In particular, existing traces must be rerun and
 unsupported SQL now blocks assessment.
 
-Release candidate `0.1.0-next.8` adds direct RLS client and Auth-admin discovery,
+Release `0.1.0-next.8` adds direct RLS client and Auth-admin discovery,
 a consumer-owned catalog provider for full SQL histories, and transactional
-INSERT controls for append-only tables. After publication, pin exactly
+INSERT controls for append-only tables. Pin exactly
 `proof-harness@0.1.0-next.8`. See [compatibility and setup](COMPATIBILITY.md#010-next8)
 for the required consumer changes.
 
@@ -111,3 +111,9 @@ The harness establishes specific tested claims. Acceptance still requires
 consumer-owned requirements and a trusted CI job that controls the harness,
 policies, and evidence. A passing trace is not a general proof of code quality
 or a defense against an executor that can rewrite the acceptance gate.
+
+
+Release candidate `0.1.0-next.9` adds isolated anonymous action probes and a
+separate positive-control sensitivity runner. It also distinguishes caller
+workspace inputs from generated result IDs. See [next.9 setup and migration](COMPATIBILITY.md)
+before upgrading; consumer invoker and catalog changes are required.

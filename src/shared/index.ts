@@ -12,11 +12,7 @@ export {
   isRlsClassification,
 } from "./vocabulary";
 
-export type {
-  ProofVerb,
-  ProofKind,
-  RlsClassification,
-} from "./vocabulary";
+export type { ProofVerb, ProofKind, RlsClassification } from "./vocabulary";
 
 export type {
   AssertionRole,
@@ -53,3 +49,5 @@ export type {
   ValidationResult,
   ValidationCategory,
 } from "./mission-types";
+export { isActionAuthenticationRefusal } from "./action-types";
+export type { ActionAuthenticationRefusal } from "./action-types";

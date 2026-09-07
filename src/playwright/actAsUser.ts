@@ -1,5 +1,9 @@
 // Import External Packages
-import type { Page } from "@playwright/test";
+import {
+  request as playwrightRequest,
+  test,
+  type Page,
+} from "@playwright/test";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 // Import Local Imports
 import { createRetryingFetch, retryTransient } from "../server/transient";
@@ -7,7 +11,11 @@ import {
   isAuthRateLimited,
   retryAuthRateLimit,
 } from "../server/auth-rate-limit";
-import type { ActionResult } from "../shared/action-types";
+import {
+  isActionAuthenticationRefusal,
+  type ActionAuthenticationRefusal,
+  type ActionResult,
+} from "../shared/action-types";
 // Import Core Dependencies
 // Import Shared Dependencies
 // Import Extension Dependencies
@@ -186,6 +194,65 @@ export const actAsUser = {
       // disposable auth row alive for one quiet-window before callers delete
       // it, matching Playwright's network-idle settling interval.
       await page.waitForTimeout(500);
+    }
+  },
+
+  /** Invoke a registered action in a disposable, cookie-free API request context. */
+  async invokeAnonymousAction(
+    page: Page,
+    opts: {
+      module: string;
+      action: string;
+      inputParams: Record<string, unknown>;
+      baseURL?: string;
+    },
+  ): Promise<ActionResult | ActionAuthenticationRefusal> {
+    let configuredBase = opts.baseURL;
+    if (!configuredBase) {
+      try {
+        configuredBase = test.info().project.use.baseURL;
+      } catch {
+        /* standalone caller supplies baseURL */
+      }
+    }
+    const endpoint = new URL(
+      "/api/proof/invoke-action",
+      configuredBase ?? page.url(),
+    );
+    if (!["http:", "https:"].includes(endpoint.protocol))
+      throw new Error(
+        "[PROOF_FAIL] action_invoke: anonymous probe requires a HTTP baseURL",
+      );
+    const context = await playwrightRequest.newContext({
+      storageState: { cookies: [], origins: [] },
+    });
+    try {
+      const response = await context.post(endpoint.href, {
+        headers: {
+          "x-proof-secret": getProofSecret(),
+          "Content-Type": "application/json",
+        },
+        data: {
+          module: opts.module,
+          action: opts.action,
+          inputParams: opts.inputParams,
+        },
+        maxRedirects: 0,
+      });
+      const body: unknown = await response.json();
+      if (
+        response.status() === 401 &&
+        isActionAuthenticationRefusal(body) &&
+        body.module === opts.module &&
+        body.action === opts.action
+      )
+        return body;
+      if (response.ok() && isActionResult(body)) return body;
+      throw new Error(
+        `[PROOF_FAIL] action_invoke: anonymous invocation returned an unrecognized response (status ${response.status()})`,
+      );
+    } finally {
+      await context.dispose();
     }
   },
 
