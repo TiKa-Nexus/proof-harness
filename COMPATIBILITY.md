@@ -27,6 +27,135 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
+### Unreleased: direct RLS clients and Auth administration (#18)
+
+The scanner recognizes immutable local bindings returned by
+`createSupabaseRLSClient`, including named-import aliases and awaited calls.
+Their table writes are assessed as RLS writes, never recorded as service-role
+writes. Binding identity is local to its scope: shadowed identifiers,
+reassignment, escaped clients/builders, and unresolved privilege still fail.
+This remains convention-based discovery of the named consumer factories, not
+verification of their implementation or arbitrary wrapper/dataflow analysis.
+
+Direct `serviceClient.auth.admin.deleteUser(...)` is recorded in the additive
+capability field `serviceRoleAuthOperations: ["deleteUser"]`, separate from
+`serviceRoleMutations`. This does not pretend the Auth API is a SQL DELETE
+(and does not infer whether its optional soft-delete argument is true).
+Other administrative methods, dynamic method names, detached calls, and
+unresolved administrative privilege remain unassessed.
+
+Regenerate capabilities. Changes to Auth operations participate in drift under
+`service_role_mutations_changed`. Coverage requires a package-origin denial
+assertion and an allowed-path control for a user-facing Auth-admin action,
+even when it has no workspace input or voluntary invariant declaration.
+Existing explicit action-gap policy handling remains unchanged; a recognized
+operation alone is not passing authorization evidence. Trace, mission and
+health protocol versions are unchanged; capability schema remains additive v1.
+
+### Unreleased: catalog providers and rollback INSERT controls (#19, #20)
+
+These changes are not in the published `0.1.0-next.7`. They are opt-in; the
+default SQL parser and REST INSERT/DELETE control remain available. No trace,
+mission, or health protocol version changes. Pin the exact next candidate only
+after it is released.
+
+#### Catalog assessment
+
+Set `schemaProvider: "scripts/proof/catalog-provider.mjs"` in the protected
+`proof.config.mjs`. `parse`, the parse step of `build`, and both sides of
+`drift` use it instead of the conservative SQL parser. ALTER and DROP are then
+evaluated by PostgreSQL, not inferred from historical CREATE statements.
+
+The module must export a default async function receiving:
+
+- `protocolVersion: 1`, `rootDir` for the tree being assessed;
+- `migrations`: ordered `{ path, sql, sha256 }` entries from the configured
+  migration directory (top-level `.sql` files), and their combined `inputHash`;
+- `withLocalPostgres(connectionUrl, callback)` and
+  `readPostgresCatalog(client, schemas = ["public"])` from `proof-harness/node`.
+  These are injected so the archived base needs no installed dependencies to
+  import these helpers. Keep the provider's own imports dependency-free.
+
+The consumer provider must create an empty disposable database, apply its
+versioned platform bootstrap and every supplied migration in order, read the
+catalog, and drop the database in `finally`. Fail on migration or cleanup
+errors. Return `{ protocolVersion: 1, assessed: true, issues: [], tables }` only
+after successful evaluation and cleanup; `tables` is the helper's result.
+The connection helper restricts connections to loopback hosts. The consumer
+owns the local database URL, creation privileges, platform bootstrap, migration
+ordering, schema selection, and any required role setup. Never use the live
+head database as the base catalog, clone an application-populated database,
+or catch a failed migration and return partial facts.
+
+Catalog table facts contain `schema`, `name`, `columns` (names), `rls_enabled`,
+`rls_forced`, and `policies`. Each policy contains `name`, `command`, `roles`,
+`mode`, `using`, and `check`. Classification is package-owned. Drift compares
+column names, RLS state including FORCE, and full policy facts; this does not
+add drift coverage for column types, defaults, functions, triggers, or grants.
+Malformed envelopes/facts and changed migration inputs fail assessment and
+replace stale successful output with an unassessed artifact.
+
+The schema artifact adds `assessment` with provider protocol/path/hash,
+migration paths/hashes, combined input hash, and repository source hash. This
+is source identity, not a signature. The provider, its platform bootstrap,
+configuration, and installed harness remain protected trust inputs.
+
+For generated migrations, retain `driftPrepare` to rebuild them in each tree.
+**Adoption requires a preparatory base commit:** register the provider, its
+platform bootstrap, and config in the consumer before the comparison that
+upgrades the package. Both base and head must declare a provider. Drift rejects
+switching assessment modes across the comparison and never substitutes head
+configuration for a base without the provider. Existing next.7 ignores the new
+keys; registering them does not repair its conservative parser. A consumer
+already blocked on next.7 needs to land this trusted setup separately before
+the candidate's first successful drift run.
+
+#### Append-only INSERT controls
+
+Configure the protected consumer config explicitly, using your local ports:
+
+```js
+insertControl: {
+  mode: "rollback",
+  databaseUrlEnv: "PROOF_DATABASE_URL",
+  role: "service_role",
+  supabaseUrl: "http://127.0.0.1:54321",
+}
+```
+
+Supply the corresponding local PostgreSQL URL through that environment
+variable; never commit its password. The configured REST origin must match
+`NEXT_PUBLIC_SUPABASE_URL`. The database URL must refer to the same stack,
+schema, and migrations as REST; the harness validates the configured origin
+but cannot discover which database a REST server actually serves.
+
+The denied INSERT still executes through the authenticated Supabase client.
+Only after an explicit `42501` denial and a service read confirming no write
+does the harness validate the same payload on one PostgreSQL connection:
+BEGIN, SET LOCAL ROLE, INSERT, force deferred constraints, ROLLBACK. The role
+must have the intended INSERT permission. Missing columns keep their database
+defaults; the harness supplies no tenancy values. An invalid payload, failed
+role change, database error, or unacknowledged rollback fails as incomplete
+evidence. The harness records the control assertion only after success and a
+REST reread confirming no matching row remains. There is no consumer callback
+that can stamp a passing control.
+
+No DELETE privilege is needed for this control. Transactional trigger writes
+also roll back, but sequence advancement and external side effects do not;
+use only a disposable local stack. This control checks database validity under
+the configured role, not REST middleware or an authenticated user's JWT
+context. Templates whose privileged insert depends on that context must supply
+a suitable database design/control strategy rather than treat this mode as
+equivalent. Product authorization errors must still use SQLSTATE `42501`;
+generic exceptions such as `P0001` are not accepted as authorization evidence.
+
+For maintainers, `PROOF_DATABASE_URL=... node tests/postgres-integration.mjs`
+after `pnpm build` exercises a separate temporary database against PostgreSQL,
+including immediate and deferred failures and catalog ALTER/DROP behavior.
+
+### 0.1.0-next.7 — audit hardening
+
+Published release `0.1.0-next.7` tightens acceptance behavior. Trace
 <a id="unreleased-audit-hardening"></a>
 
 ### 0.1.0-next.7

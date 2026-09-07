@@ -1,3 +1,4 @@
+import { configuredInsertControl } from "./insert-control";
 import { isDeepStrictEqual } from "node:util";
 // Import External Packages
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -727,50 +728,68 @@ async function runRlsProbe(
         "an explicit INSERT denial",
         "no error and no committed row",
       );
-    // A denied malformed payload proves nothing: exercise its constraints with the service role.
-    let controlError: unknown;
-    let controlFailed = false;
-    try {
-      const control = await sb.from(probe.table).insert(probe.payload);
-      if (control.error)
-        throw proofFail(
-          "authorization_incomplete",
-          "a valid INSERT payload",
-          control.error.message,
+    const rolledBack = await configuredInsertControl(
+      probe.table,
+      probe.payload,
+    );
+    if (!rolledBack) {
+      // A denied malformed payload proves nothing: exercise its constraints with the service role.
+      let controlError: unknown;
+      let controlFailed = false;
+      try {
+        const control = await sb.from(probe.table).insert(probe.payload);
+        if (control.error)
+          throw proofFail(
+            "authorization_incomplete",
+            "a valid INSERT payload",
+            control.error.message,
+          );
+        const controlCount = await countMatchingAsService(
+          sb,
+          probe.table,
+          probe.payload,
         );
-      const controlCount = await countMatchingAsService(
-        sb,
-        probe.table,
+        if (controlCount !== 1)
+          throw proofFail(
+            "authorization_incomplete",
+            "exactly one control row",
+            `${controlCount} control rows`,
+          );
+      } catch (error) {
+        controlFailed = true;
+        controlError = error;
+      }
+      const cleanup = await applyEq(
+        sb.from(probe.table).delete(),
         probe.payload,
       );
-      if (controlCount !== 1)
+      if (
+        cleanup.error ||
+        (await countMatchingAsService(sb, probe.table, probe.payload)) !== 0
+      )
         throw proofFail(
           "authorization_incomplete",
-          "exactly one control row",
-          `${controlCount} control rows`,
+          "control row cleanup",
+          cleanup.error?.message ?? "row remains",
         );
-    } catch (error) {
-      controlFailed = true;
-      controlError = error;
+      if (controlFailed) throw controlError;
     }
-    const cleanup = await applyEq(sb.from(probe.table).delete(), probe.payload);
-    if (
-      cleanup.error ||
-      (await countMatchingAsService(sb, probe.table, probe.payload)) !== 0
-    )
+    // Both control lifecycles must leave no committed matching row.
+    if ((await countMatchingAsService(sb, probe.table, probe.payload)) !== 0)
       throw proofFail(
         "authorization_incomplete",
-        "control row cleanup",
-        cleanup.error?.message ?? "row remains",
+        "no committed INSERT control row",
+        "control left a matching row",
       );
-    if (controlFailed) throw controlError;
     recordAssertion({
       kind: "authorization",
       target,
       operation: probe.op,
       role: "control",
       passed: true,
-      detail: "service-role INSERT validated the payload and its constraints",
+      detail: rolledBack
+        ? "configured-role INSERT validated immediate and deferred constraints; rollback acknowledged"
+        : "service-role INSERT validated the payload and its constraints",
     });
     recordAssertion({
       kind: "authorization",

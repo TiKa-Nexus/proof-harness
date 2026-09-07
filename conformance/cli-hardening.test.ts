@@ -366,3 +366,105 @@ it("blocks a mutation query with an unresolved client privilege", () => {
   expect(result.status).not.toBe(0);
   expect(result.output).toContain("privilege cannot be resolved");
 });
+
+it("recognizes aliased RLS clients without inventing service mutations", () => {
+  write(
+    "src/modules/widgets/src/actions/create.ts",
+    `${action("one")}
+    import {createSupabaseRLSClient as makeRls} from 'factory';
+    const db = await makeRls(); await db.from('widgets').update({name:'x'});`,
+  );
+  const result = run("scan");
+  expect(result.status, result.output).toBe(0);
+  expect(
+    json(".proof/capabilities.json").capabilities[0].serviceRoleMutations,
+  ).toEqual([]);
+});
+it("records direct aliased Auth administration separately from table mutations", () => {
+  write(
+    "src/modules/widgets/src/actions/create.ts",
+    `${action("one")}
+    import {createSupabaseServiceClient as makeService} from 'factory';
+    const db = makeService(); await db.auth.admin.deleteUser('id');`,
+  );
+  const result = run("scan");
+  expect(result.status, result.output).toBe(0);
+  const expected = JSON.parse(
+    fs.readFileSync(
+      path.resolve(
+        import.meta.dirname,
+        "../proof-consumer-fixtures/capabilities/auth-admin.json",
+      ),
+      "utf8",
+    ),
+  ).capabilities[0];
+  expect(json(".proof/capabilities.json").capabilities[0]).toMatchObject({
+    serviceRoleMutations: expected.serviceRoleMutations,
+    serviceRoleAuthOperations: expected.serviceRoleAuthOperations,
+  });
+});
+it.each([
+  "const db=createSupabaseRLSClient(); function hidden(db) { return db.from('widgets').update({}); }",
+  "let db=createSupabaseRLSClient(); db=unknown(); await db.from('widgets').update({});",
+  "const db=createSupabaseRLSClient(); const query=db.from('widgets'); await query.update({});",
+  "const db=createSupabaseServiceClient(); const admin=db.auth.admin; await admin.deleteUser('id');",
+  "const db=createSupabaseServiceClient(); const remove=db.auth.admin.deleteUser; await remove('id');",
+  "const db=createSupabaseServiceClient(); await db.auth.admin.unknownMethod('id');",
+  "const db=createSupabaseServiceClient(); await db.auth.admin['deleteUser']('id');",
+  "function createSupabaseRLSClient() { return unknown(); } const db=createSupabaseRLSClient(); await db.from('widgets').delete();",
+])(
+  "keeps unresolved, shadowed and escaped client shapes unassessed: %s",
+  (body) => {
+    write(
+      "src/modules/widgets/src/actions/create.ts",
+      `${action("one")}\n${body}`,
+    );
+    expect(run("scan").status).toBe(1);
+  },
+);
+it.each([
+  "const db=unknown(); await db.auth.admin.deleteUser('id');",
+  "const db=createSupabaseRLSClient(); await db.auth.admin.deleteUser('id');",
+  "const db=createSupabaseRLSClient(); helper(db);",
+  "const factory=createSupabaseRLSClient; helper(factory);",
+])(
+  "rejects unresolved administrative privilege or escaping RLS bindings: %s",
+  (body) => {
+    write(
+      "src/modules/widgets/src/actions/create.ts",
+      `${action("one")}\n${body}`,
+    );
+    expect(run("scan").status).toBe(1);
+  },
+);
+it("includes Auth admin additions in privileged-operation drift", async () => {
+  const { diffCapabilities } = await import("../cli/engines/proof_drift.mjs");
+  const base = {
+    capabilities: [
+      { module: "users", name: "removeUser", serviceRoleAuthOperations: [] },
+    ],
+  };
+  const head = JSON.parse(
+    fs.readFileSync(
+      path.resolve(
+        import.meta.dirname,
+        "../proof-consumer-fixtures/capabilities/auth-admin.json",
+      ),
+      "utf8",
+    ),
+  );
+  const entries = diffCapabilities(base, head);
+  expect(entries[0].facets).toContain("service_role_mutations_changed");
+});
+it.each([
+  "const db=createSupabaseRLSClient(); await helper(db.from('widgets'));",
+  "const db=createSupabaseServiceClient(); await helper(db.from('widgets').update({}));",
+  "const db=createSupabaseServiceClient(); return db.from('widgets');",
+  "const db=createSupabaseServiceClient(); const from=db.from; await from('widgets').update({});",
+])("rejects builders handed to unsupported consumers: %s", (body) => {
+  write(
+    "src/modules/widgets/src/actions/create.ts",
+    `${action("one")}\n${body}`,
+  );
+  expect(run("scan").status).toBe(1);
+});

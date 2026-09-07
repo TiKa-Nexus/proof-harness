@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "capabilities": [
+    {
+      "name": "removeUser",
+      "module": "users",
+      "invariants": [],
+      "acceptsWorkspaceId": false,
+      "internalOnly": false,
+      "serviceRoleMutations": [],
+      "serviceRoleAuthOperations": ["deleteUser"]
+    }
+  ],
+  "unclassified": []
+}

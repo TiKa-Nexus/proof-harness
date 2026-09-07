@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "assessed": true,
+  "issues": [],
+  "tables": [{
+    "schema": "public",
+    "name": "widgets",
+    "columns": ["id", "workspace_id"],
+    "rls_enabled": true,
+    "rls_forced": false,
+    "policies": [{"name":"members", "command":"SELECT", "roles":["authenticated"], "mode":"PERMISSIVE", "using":"workspace_id IN (SELECT get_user_workspace_ids(auth.uid()))", "check":""}]
+  }]
+}

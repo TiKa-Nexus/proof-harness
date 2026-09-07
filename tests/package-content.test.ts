@@ -187,6 +187,7 @@ describe("proof-harness package contents", () => {
           'import * as vocabulary from "proof-harness/portable-vocabulary";',
           'if (!shared.TRACE_ARTIFACT_SCHEMA_VERSION) throw new Error("shared export missing");',
           'if (typeof nodeApi.validateMission !== "function") throw new Error("node export missing");',
+          'for (const name of ["withLocalPostgres", "readPostgresCatalog", "rollbackInsertControl"]) if (typeof nodeApi[name] !== "function") throw new Error("PostgreSQL export missing: " + name);',
           'if (typeof serverApi.proofGuard !== "function") throw new Error("server export missing");',
           'if (!vocabulary.ACTION_CHANGE_KINDS) throw new Error("vocabulary export missing");',
           'console.log("consumer-import-ok server-import-ok");',
@@ -227,5 +228,57 @@ describe("proof-harness package contents", () => {
         consumer,
       ),
     ).toContain("schema");
+    fs.writeFileSync(
+      path.join(actionsDir, "clients.ts"),
+      `
+      import {createSupabaseRLSClient as rls, createSupabaseServiceClient as service} from 'consumer-factories';
+      export const remove = createAction({functionName:'removeUser'});
+      const member = rls(); await member.from('users').update({name:'x'});
+      const admin = service(); await admin.auth.admin.deleteUser('id');
+    `,
+    );
+    expect(
+      run(
+        "node",
+        ["node_modules/proof-harness/cli/proof-harness.mjs", "scan"],
+        consumer,
+      ),
+    ).toContain("2 capabilities, 0 unclassified");
+    const scanned = JSON.parse(
+      fs.readFileSync(path.join(consumer, ".proof/capabilities.json"), "utf8"),
+    );
+    expect(
+      scanned.capabilities.find(
+        (c: { name: string }) => c.name === "removeUser",
+      ),
+    ).toMatchObject({
+      serviceRoleMutations: [],
+      serviceRoleAuthOperations: ["deleteUser"],
+    });
+
+    // Exercise the provider through the installed CLI, not source-tree imports.
+    fs.writeFileSync(
+      path.join(consumer, "proof.config.mjs"),
+      'export default {schemaProvider:"provider.mjs",roots:{actions:["modules"],migrations:"sql"}};',
+    );
+    fs.writeFileSync(
+      path.join(consumer, "provider.mjs"),
+      'export default async ({withLocalPostgres,readPostgresCatalog}) => { if(typeof withLocalPostgres!=="function" || typeof readPostgresCatalog!=="function") throw new Error("provider helpers missing"); return ' +
+        fs.readFileSync(
+          path.join(
+            ROOT,
+            "proof-consumer-fixtures/schema-provider/catalog.json",
+          ),
+          "utf8",
+        ) +
+        "; };",
+    );
+    expect(
+      run(
+        "node",
+        ["node_modules/proof-harness/cli/proof-harness.mjs", "parse"],
+        consumer,
+      ),
+    ).toContain("catalog provider assessed 1 tables");
   }, 120_000);
 });

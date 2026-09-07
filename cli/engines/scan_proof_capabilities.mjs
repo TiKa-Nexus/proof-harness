@@ -188,14 +188,21 @@ function exportedName(call, source) {
   return exports.length === 1 ? exports[0].name.text : null;
 }
 function scanFile(file, constants) {
-  const source = ts.createSourceFile(
-    file,
-    fs.readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-  );
+  // Bind identifiers within this file without resolving consumer dependencies.
+  const program = ts.createProgram([file], {
+    noResolve: true,
+    noLib: true,
+    target: ts.ScriptTarget.Latest,
+  });
+  const source = program.getSourceFile(file);
+  const checker = program.getTypeChecker();
+  const symbol = (node) => checker.getSymbolAtLocation(node);
   const actionNames = new Set(["createAction"]);
-  const serviceFactories = new Set(["createSupabaseServiceClient"]);
+  const factoryNames = new Map([
+    ["createSupabaseServiceClient", "service"],
+    ["createSupabaseRLSClient", "rls"],
+  ]);
+  const importedFactories = new Map();
   for (const statement of source.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const bindings = statement.importClause?.namedBindings;
@@ -203,9 +210,16 @@ function scanFile(file, constants) {
     for (const item of bindings.elements) {
       const imported = (item.propertyName ?? item.name).text;
       if (imported === "createAction") actionNames.add(item.name.text);
-      if (imported === "createSupabaseServiceClient")
-        serviceFactories.add(item.name.text);
+      if (factoryNames.has(imported))
+        importedFactories.set(symbol(item.name), factoryNames.get(imported));
     }
+  }
+  function factoryKind(node) {
+    if (!ts.isIdentifier(node)) return undefined;
+    const binding = symbol(node);
+    return binding
+      ? importedFactories.get(binding)
+      : factoryNames.get(node.text);
   }
   const calls = [];
   visit(source, (n) => {
@@ -241,25 +255,33 @@ function scanFile(file, constants) {
     if (ts.isCallExpression(n.parent) && n.parent.expression === n) return;
     problems.push("action factory escapes a recognized direct call");
   });
-  const clients = new Set();
+  visit(source, (n) => {
+    if (!ts.isIdentifier(n) || !factoryKind(n)) return;
+    if (ts.isImportSpecifier(n.parent)) return;
+    if (ts.isCallExpression(n.parent) && n.parent.expression === n) return;
+    problems.push("client factory escapes a recognized direct call");
+  });
+  const clients = new Map();
   visit(source, (n) => {
     if (!ts.isVariableDeclaration(n) || !ts.isIdentifier(n.name)) return;
     const value = unwrap(n.initializer);
-    if (
-      value &&
-      ts.isCallExpression(value) &&
-      ts.isIdentifier(value.expression) &&
-      serviceFactories.has(value.expression.text)
-    )
-      clients.add(n.name.text);
+    if (!value || !ts.isCallExpression(value)) return;
+    const kind = factoryKind(value.expression);
+    if (kind) {
+      if (!(n.parent.flags & ts.NodeFlags.Const))
+        problems.push("known clients must use immutable const bindings");
+      clients.set(symbol(n.name), kind);
+    }
   });
+  const clientKind = (node) =>
+    ts.isIdentifier(node) ? clients.get(symbol(node)) : undefined;
   visit(source, (n) => {
     if (!ts.isCallExpression(n)) return;
+    const kind = factoryKind(n.expression);
     const isFactory =
-      (ts.isIdentifier(n.expression) &&
-        serviceFactories.has(n.expression.text)) ||
+      kind ||
       (ts.isPropertyAccessExpression(n.expression) &&
-        n.expression.name.text === "createSupabaseServiceClient");
+        factoryNames.has(n.expression.name.text));
     if (!isFactory) return;
     let parent = n.parent;
     while (ts.isAwaitExpression(parent) || ts.isParenthesizedExpression(parent))
@@ -267,24 +289,72 @@ function scanFile(file, constants) {
     if (
       !ts.isVariableDeclaration(parent) ||
       !ts.isIdentifier(parent.name) ||
-      !clients.has(parent.name.text)
+      !clientKind(parent.name)
     )
-      problems.push(
-        "service client factory result is not a recognized local client",
-      );
+      problems.push("client factory result is not a recognized local client");
   });
+  // Keep Auth administrative calls separate from SQL table mutations. In
+  // particular deleteUser can soft-delete; it is not a PostgREST DELETE.
+  const authOperations = new Set();
+  const knownAuthOperations = new Set(["deleteUser"]);
+  function authCall(root) {
+    let current = root;
+    const names = [];
+    while (
+      ts.isPropertyAccessExpression(current.parent) &&
+      current.parent.expression === current
+    ) {
+      current = current.parent;
+      names.push(current.name.text);
+    }
+    return names.length === 3 &&
+      names[0] === "auth" &&
+      names[1] === "admin" &&
+      ts.isCallExpression(current.parent) &&
+      current.parent.expression === current
+      ? names[2]
+      : undefined;
+  }
   const mutations = new Map();
   visit(source, (n) => {
-    if (ts.isIdentifier(n) && clients.has(n.text)) {
+    if (ts.isIdentifier(n) && clientKind(n)) {
       const parent = n.parent;
       const declaration = ts.isVariableDeclaration(parent) && parent.name === n;
       const query =
         ts.isPropertyAccessExpression(parent) &&
         parent.expression === n &&
-        parent.name.text === "from";
-      if (!declaration && !query)
+        parent.name.text === "from" &&
+        ts.isCallExpression(parent.parent) &&
+        parent.parent.expression === parent;
+      const adminOperation =
+        clientKind(n) === "service" ? authCall(n) : undefined;
+      // Authenticated Auth calls are not privileged service operations. Require
+      // an uninterrupted call chain; aliases and detached methods remain unknown.
+      let authRoot = n;
+      const authPath = [];
+      while (
+        ts.isPropertyAccessExpression(authRoot.parent) &&
+        authRoot.parent.expression === authRoot
+      ) {
+        authRoot = authRoot.parent;
+        authPath.push(authRoot.name.text);
+      }
+      const rlsAuth =
+        clientKind(n) === "rls" &&
+        authPath[0] === "auth" &&
+        authPath[1] !== "admin" &&
+        ts.isCallExpression(authRoot.parent) &&
+        authRoot.parent.expression === authRoot;
+      if (adminOperation && knownAuthOperations.has(adminOperation))
+        authOperations.add(adminOperation);
+      if (
+        !declaration &&
+        !query &&
+        !rlsAuth &&
+        !(adminOperation && knownAuthOperations.has(adminOperation))
+      )
         problems.push(
-          `service client ${n.text} escapes a recognized query chain`,
+          `${clientKind(n) === "service" ? "service" : "RLS"} client ${n.text} escapes a recognized query chain`,
         );
     }
     if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression))
@@ -292,28 +362,48 @@ function scanFile(file, constants) {
     if (
       n.expression.name.text === "from" &&
       ts.isIdentifier(n.expression.expression) &&
-      clients.has(n.expression.expression.text)
+      clientKind(n.expression.expression)
     ) {
       let chain = n;
       while (
         chain.parent &&
         (ts.isPropertyAccessExpression(chain.parent) ||
-          ts.isCallExpression(chain.parent))
+          ts.isCallExpression(chain.parent)) &&
+        chain.parent.expression === chain
       )
         chain = chain.parent;
       let parent = chain.parent;
+      let awaited = false;
       while (
         parent &&
         (ts.isAwaitExpression(parent) || ts.isParenthesizedExpression(parent))
-      )
+      ) {
+        if (ts.isAwaitExpression(parent)) awaited = true;
         parent = parent.parent;
+      }
       if (
-        parent &&
-        ts.isVariableDeclaration(parent) &&
-        !ts.isAwaitExpression(chain.parent)
+        !awaited &&
+        (chain === n ||
+          !parent ||
+          !(
+            ts.isReturnStatement(parent) ||
+            ts.isExpressionStatement(parent) ||
+            (ts.isArrowFunction(parent) && parent.body === chain)
+          ))
       )
         problems.push("service query builder escapes its recognized chain");
     }
+    const admin = n.expression.expression;
+    if (
+      ts.isPropertyAccessExpression(admin) &&
+      admin.name.text === "admin" &&
+      ts.isPropertyAccessExpression(admin.expression) &&
+      admin.expression.name.text === "auth" &&
+      clientKind(admin.expression.expression) !== "service"
+    )
+      problems.push(
+        "Auth admin call uses a client whose service privilege cannot be resolved",
+      );
     const operation = n.expression.name.text;
     if (!["insert", "upsert", "update", "delete"].includes(operation)) return;
     let from = n.expression.expression;
@@ -330,12 +420,14 @@ function scanFile(file, constants) {
     )
       return;
     const client = from.expression.expression;
-    if (!ts.isIdentifier(client) || !clients.has(client.text)) {
+    if (!ts.isIdentifier(client) || !clientKind(client)) {
       problems.push(
         "mutation query uses a client whose privilege cannot be resolved",
       );
       return;
     }
+    // RLS writes are recognized but must never be promoted to service writes.
+    if (clientKind(client) === "rls") return;
     const table =
       literal(from.arguments[0]) ??
       (from.arguments[0] && ts.isIdentifier(from.arguments[0])
@@ -410,6 +502,7 @@ function scanFile(file, constants) {
       serviceRoleMutations: [...mutations.values()].sort((a, b) =>
         `${a.table}:${a.operation}`.localeCompare(`${b.table}:${b.operation}`),
       ),
+      serviceRoleAuthOperations: [...authOperations].sort(),
       middleware: {
         auth: /\bwithAuth\s*\(/.test(body),
         tenantIsolation: /\bwithTenantIsolation\s*\(/.test(body),

@@ -76,6 +76,8 @@ export interface CapabilitiesArtifact {
       table: string;
       operation: "insert" | "upsert" | "update" | "delete";
     }>;
+    /** Direct supported privileged Auth API calls, separate from SQL writes. */
+    serviceRoleAuthOperations?: readonly "deleteUser"[];
     /** Relevant guards observed in the action pipeline. */
     middleware?: {
       auth: boolean;
@@ -778,7 +780,10 @@ export function validateMission(input: ValidateMissionInput): ValidationResult {
   const evidenceIssues = Array.isArray(input.traces)
     ? input.traces.flatMap((t) => traceShapeIssues(t))
     : ["trace_shape: trace bundle must be an array"];
-  if (!evidenceIssues.length && new Set(input.traces.map((t) => t.proofId)).size !== input.traces.length)
+  if (
+    !evidenceIssues.length &&
+    new Set(input.traces.map((t) => t.proofId)).size !== input.traces.length
+  )
     evidenceIssues.push("duplicate_proof_id");
   if (evidenceIssues.length)
     return {
