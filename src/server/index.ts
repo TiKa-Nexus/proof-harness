@@ -38,3 +38,4 @@ export type {
   ProofFixtureFactory,
 } from "./fixture";
 export type { SeedWorkspace, SeedUser } from "./seed";
+export { authenticationRedirectResponse } from "./authentication-redirect";

@@ -54,7 +54,7 @@ describe("proof-harness package contents", () => {
     ) as Record<string, unknown>;
     expect(manifest).toMatchObject({
       name: "proof-harness",
-      version: "0.1.0-next.8",
+      version: "0.1.0-next.9",
       license: "Apache-2.0",
       repository: {
         type: "git",
@@ -84,8 +84,8 @@ describe("proof-harness package contents", () => {
 
     expect(packed).toMatchObject({
       name: "proof-harness",
-      version: "0.1.0-next.8",
-      filename: "proof-harness-0.1.0-next.8.tgz",
+      version: "0.1.0-next.9",
+      filename: "proof-harness-0.1.0-next.9.tgz",
     });
     expect(files).toEqual(
       expect.arrayContaining([
@@ -188,7 +188,8 @@ describe("proof-harness package contents", () => {
           'if (!shared.TRACE_ARTIFACT_SCHEMA_VERSION) throw new Error("shared export missing");',
           'if (typeof nodeApi.validateMission !== "function") throw new Error("node export missing");',
           'for (const name of ["withLocalPostgres", "readPostgresCatalog", "rollbackInsertControl"]) if (typeof nodeApi[name] !== "function") throw new Error("PostgreSQL export missing: " + name);',
-          'if (typeof serverApi.proofGuard !== "function") throw new Error("server export missing");',
+          'if (typeof serverApi.proofGuard !== "function" || typeof serverApi.authenticationRedirectResponse !== "function") throw new Error("server export missing");',
+          'if (typeof playwrightApi.actAsUser.invokeAnonymousAction !== "function" || typeof shared.isActionAuthenticationRefusal !== "function") throw new Error("anonymous action API missing");',
           'if (!vocabulary.ACTION_CHANGE_KINDS) throw new Error("vocabulary export missing");',
           'console.log("consumer-import-ok server-import-ok");',
         ].join(""),
@@ -204,6 +205,17 @@ describe("proof-harness package contents", () => {
       consumer,
     );
     expect(binOutput).toContain("Usage: proof-harness");
+    expect(
+      run(
+        "node",
+        [
+          "node_modules/proof-harness/cli/proof-harness.mjs",
+          "controls",
+          "--help",
+        ],
+        consumer,
+      ),
+    ).toContain("controlSensitivityCatalog");
     fs.writeFileSync(
       path.join(consumer, "proof.config.mjs"),
       'export default {roots:{actions:["modules"],migrations:"sql"}};',

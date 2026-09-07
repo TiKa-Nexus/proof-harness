@@ -1246,3 +1246,23 @@ Such user-facing actions require denial and allowed-control evidence in
 coverage even without a workspace input. Changes use the existing
 `service_role_mutations_changed` drift facet. See `COMPATIBILITY.md` for
 supported factory/binding shapes and required consumer regeneration.
+
+
+## Anonymous invocations and control sensitivity (0.1.0-next.9 candidate)
+
+The versioned anonymous refusal envelope is `ActionAuthenticationRefusal`
+(protocol 1), validated by `isActionAuthenticationRefusal` from the shared
+entry point. The server exports `authenticationRedirectResponse`; Playwright
+exports `actAsUser.invokeAnonymousAction` and accepts `actor: "anonymous"` in
+`assert.authorization` action probes. Only an action-bound, expected
+authentication redirect can establish a passing anonymous denial; generic
+exceptions are not evidence. See `COMPATIBILITY.md` for the required protected
+invoker integration and allowed authenticated control.
+
+`proof-harness controls` consumes `controlSensitivityCatalog` independently
+from primary mutation inventory and writes `mode: "control-sensitivity"`
+results under `artifacts.controlSensitivity`. Its mapped failed controls never
+count as primary mutation detection. The initial contract is limited to
+tenant-isolation SELECT anti-vacuity checks with `tenant_isolation_control`;
+see `COMPATIBILITY.md` for exact selectors, fresh baseline requirements and
+recovery. Consumer claims and product fixtures remain consumer-owned.

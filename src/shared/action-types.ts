@@ -28,3 +28,28 @@ export interface InvokeActionRequest {
   action: string;
   inputParams: Record<string, unknown>;
 }
+
+/** Auth refusal emitted only by the protected invoker's redirect adapter. */
+export interface ActionAuthenticationRefusal {
+  protocolVersion: 1;
+  type: "proof_action_auth_refusal";
+  module: string;
+  action: string;
+  reason: "authentication_required";
+  redirect: string;
+}
+
+export function isActionAuthenticationRefusal(
+  value: unknown,
+): value is ActionAuthenticationRefusal {
+  if (!value || typeof value !== "object") return false;
+  const body = value as Partial<ActionAuthenticationRefusal>;
+  return (
+    body.protocolVersion === 1 &&
+    body.type === "proof_action_auth_refusal" &&
+    body.reason === "authentication_required" &&
+    typeof body.module === "string" &&
+    typeof body.action === "string" &&
+    typeof body.redirect === "string"
+  );
+}

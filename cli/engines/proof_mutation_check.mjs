@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import {
+  validateControlBaseline,
+  assertionSelectorsTurnedRed,
+} from "./proof_control_sensitivity.mjs";
 import { readTraceDirectory } from "../../dist/node.js";
 // ---------------------------------------------------------------------------
 // proof_mutation_check.mjs
@@ -59,6 +63,7 @@ import {
   assertArtifactDirectory,
 } from "../config.mjs";
 
+const CONTROL_SENSITIVITY = process.argv.includes("--control-sensitivity");
 const CONFIG = await loadProofConfig();
 process.chdir(CONFIG.rootDir);
 
@@ -70,7 +75,9 @@ const CONFIG_TOML = CONFIG.repository.supabaseConfig;
 const TRACE_DIR = CONFIG.artifacts.traces;
 const SCHEMA_PATH = CONFIG.artifacts.schema;
 const MUTATION_POLICY_PATH = CONFIG.policies.mutation;
-const MUTATION_ARTIFACT_DIR = CONFIG.artifacts.mutations;
+const MUTATION_ARTIFACT_DIR = CONTROL_SENSITIVITY
+  ? CONFIG.artifacts.controlSensitivity
+  : CONFIG.artifacts.mutations;
 const RECOVERY_FILE = path.join(
   path.dirname(MUTATION_ARTIFACT_DIR),
   "mutation-recovery.json",
@@ -82,7 +89,11 @@ let activeProof = null;
 // Mutations
 // ---------------------------------------------------------------------------
 
-const MUTATIONS = await loadMutationCatalog(CONFIG);
+const MUTATIONS = await loadMutationCatalog(
+  CONTROL_SENSITIVITY
+    ? { ...CONFIG, mutationCatalog: CONFIG.controlSensitivityCatalog }
+    : CONFIG,
+);
 
 // ---------------------------------------------------------------------------
 // Database access
@@ -417,6 +428,30 @@ function readMutationPolicy() {
 }
 
 function buildMutationInventory() {
+  if (CONTROL_SENSITIVITY) {
+    if (!CONFIG.controlSensitivityCatalog)
+      throw new Error(
+        "[PROOF_FAIL] control_contract: configure a separate controlSensitivityCatalog",
+      );
+    const traces = readTraceDirectory(TRACE_DIR, {
+      rootDir: CONFIG.rootDir,
+      excludedPaths: evidenceExclusions(CONFIG),
+    });
+    const ids = new Set();
+    const mutations = MUTATIONS.map((m) => {
+      if (ids.has(m.id)) throw new Error("duplicate control-sensitivity id");
+      ids.add(m.id);
+      return { ...m, resolvedControls: validateControlBaseline(m, traces) };
+    });
+    return {
+      mutations,
+      problems: [],
+      claims: [],
+      acceptedClaims: [],
+      uncoveredClaims: [],
+      uncoveredActionClaims: [],
+    };
+  }
   const derived = deriveAutomaticRlsMutations({
     tracesDir: TRACE_DIR,
     excludedPaths: evidenceExclusions(CONFIG),
@@ -694,29 +729,6 @@ function changedTraceFiles(directory) {
   );
 }
 
-function failedClaimKeys(changed) {
-  const keys = new Set();
-  for (const item of changed) {
-    for (const step of item.trace.steps ?? []) {
-      for (const assertion of step.assertions ?? []) {
-        if (
-          assertion.passed !== false ||
-          !assertion.emittedBy ||
-          assertion.status === "skipped" ||
-          assertion.status === "incomplete" ||
-          typeof assertion.operation !== "string"
-        ) {
-          continue;
-        }
-        keys.add(
-          `${assertion.kind}\0${assertion.target}\0${assertion.operation}`,
-        );
-      }
-    }
-  }
-  return keys;
-}
-
 function archiveMutationTraces(
   mutation,
   directory,
@@ -736,15 +748,32 @@ function archiveMutationTraces(
   const requiredClaims = Array.isArray(mutation.claims)
     ? mutation.claims
     : (mutation.resolvedClaims ?? []);
-  const redClaims = failedClaimKeys(changed);
+  const traces = changed.map((item) => item.trace);
   const claimsTurnedRed =
-    requiredClaims.length > 0 &&
-    requiredClaims.every((claim) =>
-      redClaims.has(`${claim.kind}\0${claim.target}\0${claim.operation}`),
+    !CONTROL_SENSITIVITY &&
+    assertionSelectorsTurnedRed(traces, requiredClaims, "primary");
+  const controlsTurnedRed =
+    CONTROL_SENSITIVITY &&
+    assertionSelectorsTurnedRed(
+      traces,
+      mutation.resolvedControls ?? [],
+      "control",
+      mutation.expectedFailureCode,
     );
-  const detected = playwrightFailed && traceTurnedRed && claimsTurnedRed;
+  const detected =
+    !CONTROL_SENSITIVITY &&
+    playwrightFailed &&
+    traceTurnedRed &&
+    claimsTurnedRed;
+  const controlRejected =
+    CONTROL_SENSITIVITY &&
+    playwrightFailed &&
+    traceTurnedRed &&
+    controlsTurnedRed;
 
   for (const item of changed) {
+    if (item.trace.specFile !== mutation.spec)
+      throw new Error(`trace ${item.name} belongs to a different proof spec`);
     if (
       item.trace.mutation?.id !== mutation.id ||
       item.trace.mutation?.planted !== true
@@ -760,6 +789,11 @@ function archiveMutationTraces(
     path.join(destination, "mutation.json"),
     JSON.stringify(
       {
+        schemaVersion: 1,
+        mode: CONTROL_SENSITIVITY ? "control-sensitivity" : "primary-mutation",
+        controlRejected,
+        controlsTurnedRed,
+        controls: mutation.resolvedControls ?? [],
         id: mutation.id,
         finding: mutation.finding,
         breaks: mutation.breaks,
@@ -777,6 +811,8 @@ function archiveMutationTraces(
   );
 
   return {
+    controlRejected,
+    controlsTurnedRed,
     names: changed.map((item) => item.name),
     detected,
     traceTurnedRed,
@@ -791,7 +827,11 @@ function writeMutationSummary(results, inventory) {
     JSON.stringify(
       {
         generatedAt: new Date().toISOString(),
-        mutations: results,
+        schemaVersion: 1,
+        mode: CONTROL_SENSITIVITY ? "control-sensitivity" : "primary-mutation",
+        ...(CONTROL_SENSITIVITY
+          ? { controls: results }
+          : { mutations: results }),
         claims: inventory.claims,
         acceptedClaims: inventory.acceptedClaims,
         uncoveredClaims: inventory.uncoveredClaims,
@@ -857,6 +897,7 @@ function parseArgs(argv) {
   const args = { inventory: false, list: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
+    if (v === "--control-sensitivity") continue;
     if (v === "--inventory") args.inventory = true;
     else if (v === "--recover") args.recover = true;
     else if (v === "--list") args.list = true;
@@ -892,16 +933,17 @@ export async function main() {
     console.log("[mutation] original subject restored and verified");
     return;
   }
-  const inventory = buildMutationInventory();
-  const mutations = inventory.mutations;
-
   if (args.help) {
-    console.log(`Usage: node scripts/proof_mutation_check.mjs [--inventory] [--list] [--only <id>] [--recover]
+    console.log(`Usage: proof-harness mutate|controls [--inventory] [--list] [--only <id>] [--recover]
 
-Re-opens each known vulnerability, asserts the matching proof fails, reverts.
-Exits non-zero if any proof failed to notice its vulnerability.`);
+mutate: primary mutation detection from mutationCatalog.
+controls: positive-control sensitivity from controlSensitivityCatalog.
+Both verify planting, run the proof, restore, and fail on incomplete evidence.`);
     return;
   }
+
+  const inventory = buildMutationInventory();
+  const mutations = inventory.mutations;
 
   if (args.inventory) {
     const problems = checkSpecCoverage(mutations, inventory.problems);
@@ -916,7 +958,7 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
     }
     printUncoveredActionClaims(inventory.uncoveredActionClaims);
     console.log(
-      `[mutation] inventory complete: ${mutations.length} mutation(s), ` +
+      `[${CONTROL_SENSITIVITY ? "control-sensitivity" : "mutation"}] inventory complete: ${mutations.length} ${CONTROL_SENSITIVITY ? "control test(s)" : "mutation(s)"}, ` +
         `${mutations.filter((mutation) => mutation.automatic).length} automatic RLS mutation(s), ` +
         `${inventory.claims.length} primary claim(s), ` +
         `${inventory.acceptedClaims.length} accepted claim exception(s).`,
@@ -925,7 +967,11 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
   }
 
   if (args.list) {
-    console.log("Mutations (each must be detected by its proof):\n");
+    console.log(
+      CONTROL_SENSITIVITY
+        ? "Controls (each must reject its planted defect):\n"
+        : "Mutations (each must be detected by its proof):\n",
+    );
     for (const m of mutations) {
       console.log(
         `  ${m.id}  [${m.finding}]${m.automatic ? " (automatic)" : ""}`,
@@ -983,7 +1029,11 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
       `[PROOF_FAIL] mutation_recovery_required: restore the journaled subject before retrying; ${RECOVERY_FILE}`,
     );
   for (const mutation of selected) {
-    if (!mutation.resolvedClaims?.length)
+    if (
+      !(CONTROL_SENSITIVITY
+        ? mutation.resolvedControls?.length
+        : mutation.resolvedClaims?.length)
+    )
       throw new Error(
         `[PROOF_FAIL] mutation_baseline_missing: ${mutation.id} has no fresh passing baseline claim`,
       );
@@ -1015,7 +1065,9 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
   const container = `supabase_db_${readProjectId()}`;
 
   console.log(
-    `[mutation] verifying that ${selected.length} planted defect(s) are detected by the proof suite`,
+    CONTROL_SENSITIVITY
+      ? `[control-sensitivity] verifying ${selected.length} positive control(s); primary detection is not assessed`
+      : `[mutation] verifying that ${selected.length} planted defect(s) are detected by the proof suite`,
   );
   console.log(`[mutation] database container: ${container}\n`);
 
@@ -1133,11 +1185,15 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
           playwrightFailed,
           reasonOk,
         );
-        const detected = archived.detected;
+        const detected = CONTROL_SENSITIVITY
+          ? archived.controlRejected
+          : archived.detected;
 
         results.push({
           id: m.id,
-          detected,
+          detected: archived.detected,
+          controlRejected: archived.controlRejected,
+          controlsTurnedRed: archived.controlsTurnedRed,
           reasonOk,
           spec: m.spec,
           expectedReason: m.expectFailureContains,
@@ -1147,7 +1203,9 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
         });
 
         if (detected && reasonOk) {
-          console.log(`   ✓ DETECTED — ${path.basename(m.spec)} turned red`);
+          console.log(
+            `   ✓ ${CONTROL_SENSITIVITY ? "CONTROL REJECTED" : "DETECTED"} — ${path.basename(m.spec)} turned red`,
+          );
           if (m.expectFailureContains) {
             console.log(
               `     (failed via ${m.expectFailureContains}, as required)`,
@@ -1157,7 +1215,11 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
           console.log(
             `   ✗ WRONG REASON — the proof failed, but not via "${m.expectFailureContains}".`,
           );
-        } else if (!archived.claimsTurnedRed) {
+        } else if (
+          !(CONTROL_SENSITIVITY
+            ? archived.controlsTurnedRed
+            : archived.claimsTurnedRed)
+        ) {
           console.log(
             "   ✗ WRONG CLAIM — the proof failed, but the mutation's mapped claim did not turn red.",
           );
@@ -1210,28 +1272,39 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
 
   writeMutationSummary(results, inventory);
 
-  const missed = results.filter((r) => r.error || !r.detected || !r.reasonOk);
+  const missed = results.filter(
+    (r) =>
+      r.error ||
+      !(CONTROL_SENSITIVITY ? r.controlRejected : r.detected) ||
+      !r.reasonOk,
+  );
   // With --only the run is a deliberate subset, so an incomplete inventory is
   // reported but not fatal; a full run treats it as a failure.
   const inventoryFatal = !args.only && coverageProblems.length > 0;
 
   console.log("── summary ─────────────────────────────────────────");
   for (const r of results) {
-    const verdict = r.error
-      ? `ERROR (${r.error.split("\n")[0]})`
-      : r.claimsTurnedRed === false
-        ? "WRONG CLAIM"
-        : !r.detected
-          ? "MISSED"
-          : !r.reasonOk
-            ? `WRONG REASON (expected ${r.expectedReason})`
-            : "detected";
+    const verdict = CONTROL_SENSITIVITY
+      ? r.error
+        ? `ERROR (${r.error})`
+        : r.controlRejected && r.reasonOk
+          ? "CONTROL REJECTED"
+          : "CONTROL NOT REJECTED"
+      : r.error
+        ? `ERROR (${r.error.split("\n")[0]})`
+        : r.claimsTurnedRed === false
+          ? "WRONG CLAIM"
+          : !r.detected
+            ? "MISSED"
+            : !r.reasonOk
+              ? `WRONG REASON (expected ${r.expectedReason})`
+              : "detected";
     console.log(`   ${r.id}: ${verdict}`);
   }
 
   if (missed.length > 0) {
     console.error(
-      `\n[PROOF_FAIL] mutation_check: ${missed.length} of ${results.length} planted defect(s) were not properly detected. ` +
+      `\n[PROOF_FAIL] ${CONTROL_SENSITIVITY ? "control_sensitivity_check" : "mutation_check"}: ${missed.length} of ${results.length} planted defect(s) were not properly detected. ` +
         `The affected proofs cannot fail, so their green status means nothing.`,
     );
     process.exit(1);
@@ -1245,7 +1318,9 @@ Exits non-zero if any proof failed to notice its vulnerability.`);
   }
 
   console.log(
-    `\n[mutation] all ${results.length} planted defect(s) were detected; the proof suite can still fail.` +
+    (CONTROL_SENSITIVITY
+      ? `\n[control-sensitivity] all ${results.length} controls rejected their planted defect; no primary mutation detection is claimed.`
+      : `\n[mutation] all ${results.length} planted defect(s) were detected; the proof suite can still fail.`) +
       ` ${inventory.acceptedClaims.length} claim(s) are unmutated by declared choice.`,
   );
 }

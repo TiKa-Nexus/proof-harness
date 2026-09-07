@@ -22,7 +22,7 @@ function printHelp() {
   console.log(`Usage: proof-harness [--config <path>] <command> [flags]
 
 Commands:
-  scan, parse, registry, build, verify, coverage, inventory, drift, mutate
+  scan, parse, registry, build, verify, coverage, inventory, drift, mutate, controls
 
 Repository paths and the protected mutation catalog are read from
 proof.config.mjs. Missing config falls back to a conventional application layout.`);
@@ -77,6 +77,8 @@ export async function runCli(argv = process.argv.slice(2)) {
     }
     return 0;
   }
+  if (command === "controls")
+    return runEngine("mutate", ["--control-sensitivity", ...args], config);
   if (command === "inventory") {
     return runEngine("mutate", ["--inventory", ...args], config);
   }

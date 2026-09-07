@@ -468,3 +468,36 @@ it.each([
   );
   expect(run("scan").status).toBe(1);
 });
+
+it("distinguishes caller input workspace IDs from generated result IDs", () => {
+  write(
+    "src/modules/widgets/src/actions/create.ts",
+    `
+ export async function create({inputParams}:{inputParams:{name:string}}) {
+   const {name}=inputParams;
+   return createAction({functionName:'create'}).run(async()=> {
+     const workspace={id:'generated'}; return {workspaceId:workspace.id,name};
+   });
+ }
+ export async function remove({inputParams: supplied}:{inputParams:{formData:{workspaceId:string}}}) {
+   const {formData: data}=supplied;
+   return createAction({functionName:'remove',params:{workspaceId:data.workspaceId}}).run(async()=>{});
+ }`,
+  );
+  const result = run("scan");
+  expect(result.status, result.output).toBe(0);
+  const caps = json(".proof/capabilities.json").capabilities;
+  expect(
+    caps.find((c: { name: string }) => c.name === "create").acceptsWorkspaceId,
+  ).toBe(false);
+  expect(
+    caps.find((c: { name: string }) => c.name === "remove").acceptsWorkspaceId,
+  ).toBe(true);
+});
+it("keeps dynamic caller input keys unassessed", () => {
+  write(
+    "src/modules/widgets/src/actions/create.ts",
+    `export async function create({inputParams}) {const key=unknown();return createAction({functionName:'create',params:inputParams[key]});}`,
+  );
+  expect(run("scan").status).toBe(1);
+});

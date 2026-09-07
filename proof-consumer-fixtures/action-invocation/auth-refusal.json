@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "type": "proof_action_auth_refusal",
+  "module": "users",
+  "action": "selfDeleteAccount",
+  "reason": "authentication_required",
+  "redirect": "/login"
+}

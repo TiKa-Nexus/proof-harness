@@ -11,7 +11,7 @@ Consumers must pin an exact prerelease version, for example:
 ```json
 {
   "devDependencies": {
-    "proof-harness": "0.1.0-next.7"
+    "proof-harness": "0.1.0-next.8"
   }
 }
 ```
@@ -27,11 +27,118 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
+### 0.1.0-next.9 — anonymous actions and control sensitivity (release candidate)
+
+Prepared for release; not yet published. After publication, pin exactly
+`proof-harness@0.1.0-next.9` and regenerate capabilities and baseline traces.
+Trace/mission/health versions remain unchanged. Authentication refusal and
+control-sensitivity output contracts use protocol/schema version 1.
+
+#### Anonymous self-service actions (#23)
+
+`assert.authorization` accepts `actor: "anonymous"` for **action probes only**.
+It sends the protected POST invoker request in a fresh API context, without
+login cookies or Authorization, and disables redirect following. It does not
+clear or reuse the authenticated page session. Use the Playwright project's
+`use.baseURL`, an explicit `action.baseURL`, or an already navigated page URL.
+
+```ts
+await assert.authorization({
+  actor: "anonymous", page,
+  action: {
+    module: "user-management", name: "selfDeleteAccount", inputParams: {},
+    expectedAuthRedirect: "/sign-in",
+  },
+});
+```
+
+The consumer must update its **guarded invoker**, after request validation and
+registered-handler lookup. In the catch around actual handler execution:
+
+```ts
+import { authenticationRedirectResponse } from "proof-harness/server";
+// Existing proofGuard, body validation, registry lookup, and handler call stay.
+const refusal = authenticationRedirectResponse(error, request, {
+  module: body.module, action: body.action, allowedRedirects: ["/sign-in"],
+});
+if (refusal) return refusal;
+// Keep the existing failure response for all other exceptions.
+```
+
+Choose the exact authentication destination from the consumer's own auth
+middleware. The adapter recognizes Next.js redirect errors only, requires no
+Cookie/Authorization request headers, and matches an exact allowlisted relative
+URL. It returns HTTP 401 with `{ protocolVersion: 1,
+ type: "proof_action_auth_refusal", module, action,
+ reason: "authentication_required", redirect }`. The client binds that envelope
+to the invoked action and the assertion checks `expectedAuthRedirect`.
+A generic 401/500, `action_threw`, invalid-form rejection, unexpected redirect,
+malformed result, or missing registry entry is incomplete evidence. Anonymous
+success is a failed authorization assertion. No seeded denied role is needed.
+
+Use `assert.actionSucceeds` with a disposable authenticated actor for the
+allowed-path control; account-deletion fixtures remain consumer-owned. The
+adapter's destination list and placement are protected trust inputs: it must
+only normalize authentication redirects from an executed registered action,
+not invoker setup errors or unrelated redirects. This is not automatic proof
+of an arbitrary application's authentication semantics.
+
+Workspace scope discovery now follows local caller-input bindings and accesses,
+including destructuring aliases and direct parse/safeParse results. It no
+longer counts comments, SQL/output keys, or generated/result workspace IDs.
+Unknown user-input dataflow used as workspace scope and dynamic input keys
+remain unassessed. Internal `_BOT.ts` actions retain their existing exemption
+from caller-boundary coverage. This is bounded local analysis, not intermodule
+schema inference. In particular `createTeamWorkspace` no longer inherits a
+cross-tenant requirement merely because it returns a new workspace ID. Declare
+any additional product invariants and add their proofs in the consumer.
+
+#### Separate positive-control sensitivity (#24)
+
+Move the old `TENANT-deny-all` entry out of the primary mutation catalog into
+a separate protected module named by `controlSensitivityCatalog` in
+`proof.config.mjs`. Keep its existing subject, apply SQL and spec; add:
+
+```js
+claims: [],
+controls: [{
+  kind: "tenant_isolation", target: "workspace_members", operation: "select",
+  emittedBy: "assert.tenantIsolation",
+}],
+expectedFailureCode: "tenant_isolation_control",
+```
+
+Run `proof-harness controls --inventory`, then `proof-harness controls` (or
+`--only TENANT-deny-all`). Both require fresh passing baseline evidence for
+every mapped package-origin **control** in the selected spec. The initial
+contract supports tenant-isolation SELECT controls emitted by
+`assert.tenantIsolation` or `assert.authorization`, with the exact failure code
+`tenant_isolation_control`. Other sensitivity categories remain unsupported.
+
+The runner reuses mutation planting/readback, isolated execution, restoration,
+and recovery checks. A successful test needs a non-timeout failed proof, a
+failed mapped control assertion of the same helper origin, and a step error
+beginning with that exact failure code. Setup errors, incomplete/skipped
+assertions, another spec, primary-only failures, or a missing failed control do
+not count. Unexpected owner-control database errors are setup failures rather
+than control rejection; explicit permission denial or zero visible owner rows
+can establish the intended anti-vacuity failure.
+
+Results live separately in `artifacts.controlSensitivity` (default
+`.proof/control-sensitivity`), with `mode: "control-sensitivity"`,
+`controlRejected`/`controlsTurnedRed`, and `detected: false`. They remain planted
+traces and cannot satisfy baseline claims or primary mutation coverage. Use
+`proof-harness controls --recover` for an interrupted run against the same
+local stack; the shared recovery journal blocks either runner until restored.
+Primary `mutate` still rejects `claims: []` with no resolved primary baseline.
+A failed control can no longer count as a failed primary claim of the same
+kind/target/operation. Wire both commands into consumer CI if both properties
+are required.
+
 ### 0.1.0-next.8
 
-Release candidate prepared for publication. Publish from `main` with workflow
-input `0.1.0-next.8` after this version change is merged. Consumers can pin
-`proof-harness@0.1.0-next.8` after the publish workflow succeeds.
+Published release `0.1.0-next.8`. Consumers pin exactly
+`proof-harness@0.1.0-next.8` when adopting these features.
 
 #### Direct RLS clients and Auth administration (#18)
 

@@ -1,3 +1,4 @@
+import { isActionAuthenticationRefusal } from "../shared/action-types";
 import { configuredInsertControl } from "./insert-control";
 import { isDeepStrictEqual } from "node:util";
 // Import External Packages
@@ -338,6 +339,10 @@ interface RlsProbe {
 }
 
 interface ActionProbe {
+  /** Exact consumer-owned login destination required by an anonymous refusal. */
+  expectedAuthRedirect?: string;
+  /** Optional absolute base URL outside the Playwright test runner. */
+  baseURL?: string;
   /** Module part of the registry key: `"<module>:<name>"`. */
   module: string;
   /** Action name part of the registry key. Must be in PROOF_ACTION_REGISTRY. */
@@ -362,7 +367,7 @@ interface AuthorizationOptions {
    * *denied*. Never pass a role the invariant says should succeed —
    * authorization proofs assert rejection, not permission.
    */
-  actor: "admin" | "member" | { email: string; password: string };
+  actor: "anonymous" | "admin" | "member" | { email: string; password: string };
   /** RLS-layer probe. At least one of `rls` or `action` is required. */
   rls?: RlsProbe;
   /**
@@ -390,7 +395,9 @@ interface ActionSucceedsOptions {
   role?: AssertionRole;
 }
 
-function describeActor(actor: AuthorizationOptions["actor"]): {
+function describeActor(
+  actor: Exclude<AuthorizationOptions["actor"], "anonymous">,
+): {
   email: string;
   password: string;
   label: string;
@@ -1136,6 +1143,13 @@ async function probeTenantIsolation(args: {
     `the owner's control SELECT on ${table}`,
   );
 
+  if (ownError && ownError.code !== "42501")
+    throw proofFail(
+      "tenant_isolation_setup",
+      "a valid owner control query",
+      ownError.message,
+    );
+
   if (ownError || (ownRows?.length ?? 0) === 0) {
     recordAssertion({
       kind: "tenant_isolation",
@@ -1653,6 +1667,61 @@ const assertMethods = {
    * });
    */
   async authorization(opts: AuthorizationOptions): Promise<void> {
+    if (opts.actor === "anonymous") {
+      if (
+        !opts.page ||
+        !opts.action ||
+        opts.rls ||
+        !opts.action.expectedAuthRedirect ||
+        (opts.action.kind && opts.action.kind !== "authorization")
+      )
+        throw new Error(
+          "[PROOF_FAIL] authorization_incomplete: anonymous authorization requires an action, page and exact expectedAuthRedirect; RLS probes are not supported",
+        );
+      const probe = opts.action;
+      const result = await actAsUser.invokeAnonymousAction(opts.page, {
+        module: probe.module,
+        action: probe.name,
+        inputParams: probe.inputParams,
+        baseURL: probe.baseURL,
+      });
+      const target = probe.target ?? `${probe.module}:${probe.name}`;
+      if (
+        !isActionAuthenticationRefusal(result) ||
+        result.redirect !== probe.expectedAuthRedirect
+      ) {
+        if ("success" in result && result.success) {
+          recordAssertion({
+            kind: "authorization",
+            target,
+            operation: "invoke",
+            role: "primary",
+            passed: false,
+            detail: "anonymous action invocation succeeded",
+          });
+          throw proofFail(
+            "authorization",
+            "anonymous request refused",
+            "action succeeded",
+          );
+        }
+        throw proofFail(
+          "authorization_incomplete",
+          "specific authentication refusal",
+          "unrecognized refusal or wrong redirect",
+        );
+      }
+      recordAssertion({
+        kind: "authorization",
+        target,
+        operation: "invoke",
+        role: "primary",
+        passed: true,
+        detail: `anonymous action refused at authentication boundary (${result.redirect})`,
+      });
+      return;
+    }
+
     if (!opts.rls && !opts.action) {
       throw new Error(
         "[PROOF_FAIL] bad_options: assert.authorization requires at least one of `rls` or `action`\n" +

@@ -8,9 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const recorded: Array<Record<string, unknown>> = [];
 const invokeAction = vi.fn();
+const invokeAnonymousAction = vi.fn();
 
 vi.mock("../playwright/actAsUser", () => ({
-  actAsUser: { invokeAction, supabaseClient: vi.fn() },
+  actAsUser: { invokeAction, invokeAnonymousAction, supabaseClient: vi.fn() },
 }));
 vi.mock("../playwright/trace", () => ({
   recordAssertion: (assertion: Record<string, unknown>) =>
@@ -113,4 +114,50 @@ describe("action assertion evidence", () => {
       }),
     );
   });
+});
+
+it("accepts only a specific anonymous auth refusal and never a generic action error", async () => {
+  const options = {
+    actor: "anonymous" as const,
+    page,
+    action: {
+      module: "users",
+      name: "selfDeleteAccount",
+      inputParams: {},
+      expectedAuthRedirect: "/login",
+    },
+  };
+  invokeAnonymousAction.mockResolvedValue({
+    success: false,
+    error: "invalid form",
+  });
+  await expect(assert.authorization(options)).rejects.toThrow(
+    "authorization_incomplete",
+  );
+  expect(recorded).toEqual([]);
+  invokeAnonymousAction.mockResolvedValue({
+    protocolVersion: 1,
+    type: "proof_action_auth_refusal",
+    module: "users",
+    action: "selfDeleteAccount",
+    reason: "authentication_required",
+    redirect: "/login",
+  });
+  await assert.authorization(options);
+  expect(recorded).toContainEqual(
+    expect.objectContaining({
+      kind: "authorization",
+      passed: true,
+      role: "primary",
+      operation: "invoke",
+    }),
+  );
+  recorded.length = 0;
+  invokeAnonymousAction.mockResolvedValue({ success: true, data: {} });
+  await expect(assert.authorization(options)).rejects.toThrow(
+    "[PROOF_FAIL] authorization:",
+  );
+  expect(recorded).toContainEqual(
+    expect.objectContaining({ passed: false, role: "primary" }),
+  );
 });

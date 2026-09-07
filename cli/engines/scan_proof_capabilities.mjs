@@ -34,6 +34,7 @@ import ts from "typescript";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { actionAcceptsWorkspaceInput } from "./proof_input_scope.mjs";
 import { loadProofConfig } from "../config.mjs";
 
 const CONFIG = await loadProofConfig();
@@ -491,9 +492,12 @@ function scanFile(file, constants) {
       verb: literal(property(proof, "verb")) ?? null,
       object: literal(property(proof, "object")) ?? null,
       invariants: invariants.filter(Boolean),
-      // Conservative file-level attribution prevents a wrapper outside the
-      // builder expression from silently removing an action coverage obligation.
-      acceptsWorkspaceId: /\bworkspace_?id\b/i.test(source.text),
+      acceptsWorkspaceId: actionAcceptsWorkspaceInput(
+        source,
+        checker,
+        exportName,
+        file.endsWith("_BOT.ts") ? [] : problems,
+      ),
       internalOnly: file.endsWith("_BOT.ts"),
       usesDirectUpdateTag:
         /import\s*\{[^}]*\bupdateTag\b[^}]*\}\s*from\s*["']next\/cache["']/.test(
