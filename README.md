@@ -17,7 +17,7 @@ Public prereleases are published under the npm `next` tag. Pin an exact
 prerelease version while the API is stabilizing:
 
 ```sh
-pnpm add proof-harness@0.1.0-next.6
+pnpm add proof-harness@0.1.0-next.7
 ```
 
 The package exposes environment-specific entry points:
@@ -92,12 +92,12 @@ The package is released from this public repository with npm provenance.
 Prerelease consumers must pin an exact version rather than using `next`, `^`, or
 `~`; see [COMPATIBILITY.md](./COMPATIBILITY.md) for the compatibility policy.
 
-## Audit hardening (0.1.0-next.7, unreleased)
+## Audit hardening (0.1.0-next.7)
 
-The working branch adds shared fail-closed trace ingestion, source freshness,
+Version `0.1.0-next.7` adds shared fail-closed trace ingestion, source freshness,
 stronger authorization probes, isolated mutation evidence and interruption
 recovery, conservative discovery, and package-owned drift regeneration.
-See [required migration changes](COMPATIBILITY.md#unreleased-audit-hardening)
+See [required migration changes](COMPATIBILITY.md#010-next7)
 before upgrading a consumer. In particular, existing traces must be rerun and
 unsupported SQL now blocks assessment.
 
