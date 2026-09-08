@@ -1278,3 +1278,15 @@ specs and protected catalogs remain responsible for these assertions' meaning.
 Control sensitivity requires recognized SDK-helper provenance and cannot count
 as primary detection. Skipped, incomplete, and setup-only failures are not
 mapped decisive primary evidence. No trace protocol change is introduced.
+
+## Conservative service RPC assessment (0.1.0-next.11)
+
+Capability schema v1 adds `serviceRoleRpcCalls: { function: string,
+assessment: "potential_privileged_write" }[]`. Missing fields in older artifacts
+are not evidence that a fresh source scan contains no RPCs. Regenerate artifacts
+when adopting this change. The scanner deliberately over-approximates service
+RPC privilege without inventing SQL table effects. Coverage requires an exact
+action-targeted primary denial and allowed control with operation `invoke`,
+including internal actions and actions without workspace inputs. Caller evidence
+is not transitively inherited. See COMPATIBILITY.md for supported syntax and
+remaining unassessable cases.

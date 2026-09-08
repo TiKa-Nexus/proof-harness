@@ -501,3 +501,40 @@ it("keeps dynamic caller input keys unassessed", () => {
   );
   expect(run("scan").status).toBe(1);
 });
+
+it.each(["", ".maybeSingle()", ".single()"])(
+  "discovers a service RPC%s as potentially privileged",
+  (suffix) => {
+    write(
+      "src/modules/widgets/src/actions/change_BOT.ts",
+      `import {createAction} from "factory"; import {createSupabaseServiceClient} from "client";
+export async function change() { return createAction({functionName:"change"}).run(async () => { const db = createSupabaseServiceClient(); return await db.rpc("atomic_change", {id:1})${suffix}; }); }`,
+    );
+    const result = run("scan");
+    expect(result.status, result.output).toBe(0);
+    const capability = json(".proof/capabilities.json").capabilities[0];
+    expect(capability.serviceRoleRpcCalls).toEqual([
+      JSON.parse(
+        fs.readFileSync(
+          "proof-consumer-fixtures/capabilities/service-rpc.json",
+          "utf8",
+        ),
+      ),
+    ]);
+    expect(capability.serviceRoleMutations).toEqual([]);
+    expect(capability.internalOnly).toBe(true);
+  },
+);
+
+it.each([
+  "const db = createSupabaseServiceClient(); await db.rpc(name, {});",
+  'const db = createSupabaseServiceClient(); const query = db.rpc("atomic_change", {}); await query;',
+  'const db = createSupabaseServiceClient(); await db.rpc("atomic_change", {}).unknown();',
+  'const db = createSupabaseRLSClient(); await db.rpc("atomic_change", {});',
+])("keeps unresolved RPC assessment blocked: %s", (body) => {
+  write(
+    "src/modules/widgets/src/actions/change.ts",
+    `import {createAction} from "factory"; import {createSupabaseServiceClient,createSupabaseRLSClient} from "client"; export async function change() { return createAction({functionName:"change"}).run(async () => { ${body} }); }`,
+  );
+  expect(run("scan").status).not.toBe(0);
+});

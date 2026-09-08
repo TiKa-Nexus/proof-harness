@@ -78,6 +78,11 @@ export interface CapabilitiesArtifact {
     }>;
     /** Direct supported privileged Auth API calls, separate from SQL writes. */
     serviceRoleAuthOperations?: readonly "deleteUser"[];
+    /** Conservative RPC assessment; does not infer SQL tables, grants or read-only behavior. */
+    serviceRoleRpcCalls?: ReadonlyArray<{
+      function: string;
+      assessment: "potential_privileged_write";
+    }>;
     /** Relevant guards observed in the action pipeline. */
     middleware?: {
       auth: boolean;
