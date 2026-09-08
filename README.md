@@ -1,15 +1,44 @@
 # proof-harness
 
-Prerelease verification and conformance toolkit for proof traces, missions,
-fixtures, and Playwright probes.
+Verification tools for making specific claims about agent-generated code—and
+checking that deliberately broken behavior makes those claims fail.
 
-This repository is the standalone source of the package. It requires Node 24
-and pnpm 11.9.0:
+Developed alongside a consumer template, this is an opinionated prerelease,
+not a universal agent acceptance system. It can help teams that already have
+executable requirements and want structured evidence, coverage checks, and
+mutation checks around them.
+
+## Try it without the template
+
+The [standalone authorization example](https://github.com/TiKa-Nexus/proof-harness/tree/main/examples/authorization)
+uses a tiny JavaScript rule and the public package. It needs Node 24 and pnpm
+11.9.0; no database, credentials, app server, or browser download.
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm check
+git clone https://github.com/TiKa-Nexus/proof-harness.git
+cd proof-harness/examples/authorization
+pnpm install
+pnpm demo
 ```
+
+You will see a passing proof, an intentionally failed proof after the rule is
+broken, and confirmation that the source was restored. The example validates
+recorded evidence; it is an introduction, not the full CLI mutation workflow.
+
+## What it does—and what it establishes
+
+The harness records structured proof traces, validates evidence and missions,
+and provides coverage, drift, mutation, and control-sensitivity engines.
+It can establish that a configured claim was observed and that a mapped defect
+was detected. The consuming project supplies the requirements and trust inputs.
+
+A passing trace does not establish overall correctness, adequate requirements,
+or security against an agent that can rewrite the acceptance gate. Keep code
+review, conventional tests, and trusted CI alongside it. See the
+[integration guide](https://github.com/TiKa-Nexus/proof-harness/blob/main/docs/INTEGRATING.md)
+for ownership, adoption steps, and current environment constraints, and
+[contributor guide](https://github.com/TiKa-Nexus/proof-harness/blob/main/CONTRIBUTING.md)
+for setup and approachable contributions.
 
 ## Installation
 
@@ -37,10 +66,11 @@ and consumer pinning requirements.
 The package has two layers; consumers should know which one they are leaning
 on:
 
-- **Assumes nothing about your schema** — trace recording and the assertion
+- **Reusable verification mechanics** — trace recording and the assertion
   vocabulary, mission validation, coverage and its ratchet, drift, mutation
   testing, and the CLI. These read your generated schema and config, or take
-  what you give them.
+  what you give them. CLI discovery supports specific source and SQL patterns;
+  configurable paths do not make every framework compatible.
 - **Assumes the conventional Supabase/workspace layout** — `seed.*` (a
   `workspaces` table with a `name` column, a `workspace_members` join table,
   and a `public.users` mirror maintained by a `handle_new_user` trigger) and

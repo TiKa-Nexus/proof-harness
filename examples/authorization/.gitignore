@@ -1,0 +1,4 @@
+node_modules/
+.proof/
+test-results/
+.proof-demo-*/
