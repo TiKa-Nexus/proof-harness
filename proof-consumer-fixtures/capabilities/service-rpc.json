@@ -1,0 +1,4 @@
+{
+  "function": "atomic_change",
+  "assessment": "potential_privileged_write"
+}

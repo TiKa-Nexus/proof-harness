@@ -27,9 +27,44 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
-### 0.1.0-next.10 — explicit primary mutation evidence (release candidate)
+### 0.1.0-next.11 (release candidate) — conservative service RPC assessment
 
-Prepared for release; not yet published. After publication, pin exactly
+Prepared for release. After publication, pin exactly `proof-harness@0.1.0-next.11`.
+Regenerate
+capabilities and rerun the complete baseline, coverage, inventory, and mutation
+validation after adoption. Trace, mission, and health versions are unchanged.
+
+Capability schema v1 gains additive `serviceRoleRpcCalls` entries with a literal
+`function` and `assessment: "potential_privileged_write"`. Direct const-bound
+service-client `.rpc("name", args)` calls support awaiting/returning the result
+and zero-argument `.single()` / `.maybeSingle()` result chains. Dynamic names,
+escaped builders, unsupported chains, and RLS-client RPCs remain unassessed.
+An RLS client can invoke a SECURITY DEFINER function; its privilege is not inferred
+from the client name. Result shaping does not establish read-only behavior.
+
+This is conservative action-boundary assessment, not SQL function-body analysis.
+It does not infer affected tables, effective grants, overloads, nested functions,
+or transactional correctness. Consumer SQL/function privilege proofs and mutation
+catalogs remain necessary; do not interpret this field as complete SQL write coverage.
+
+Every service RPC action requires passing primary denial and allowed control
+assertions targeting the exact `module:action`, both with `operation: "invoke"`.
+The requirement applies without workspace inputs and to `_BOT` actions. Existing
+assertion-origin rules remain in force; explicit authorization assertions retain
+the consumer-owned trust boundary. RPC requirements cannot be waived through
+`acceptedActionGaps`. No new runtime helper or caller-to-callee evidence mapping
+is introduced.
+
+Evidence for a signed webhook caller does not automatically satisfy a separately
+callable write action. Protect and test the actual action boundary, including
+alternative invocation paths; a staged route, `_BOT` suffix, or a generic 500
+response is not proof of authorization. If that boundary cannot be established,
+coverage remains blocked. Do not hide RPCs from discovery to bypass the gate.
+
+
+### 0.1.0-next.10 — explicit primary mutation evidence
+
+Published release. Pin exactly
 `proof-harness@0.1.0-next.10` and rerun a fresh baseline before mutation checks.
 Trace, mission, and health protocol versions remain unchanged.
 

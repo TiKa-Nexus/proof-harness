@@ -317,6 +317,7 @@ function scanFile(file, constants) {
       : undefined;
   }
   const mutations = new Map();
+  const rpcCalls = new Set();
   visit(source, (n) => {
     if (ts.isIdentifier(n) && clientKind(n)) {
       const parent = n.parent;
@@ -324,7 +325,7 @@ function scanFile(file, constants) {
       const query =
         ts.isPropertyAccessExpression(parent) &&
         parent.expression === n &&
-        parent.name.text === "from" &&
+        ["from", "rpc"].includes(parent.name.text) &&
         ts.isCallExpression(parent.parent) &&
         parent.parent.expression === parent;
       const adminOperation =
@@ -360,6 +361,49 @@ function scanFile(file, constants) {
     }
     if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression))
       return;
+    if (n.expression.name.text === "rpc") {
+      const kind = clientKind(n.expression.expression);
+      const target = literal(n.arguments[0]);
+      if (kind !== "service")
+        problems.push(
+          "RPC privilege/effects cannot be resolved: only direct service-client RPC assessment is supported",
+        );
+      if (!target || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(target))
+        problems.push("RPC requires a literal unqualified function name");
+      let chain = n;
+      while (
+        ts.isPropertyAccessExpression(chain.parent) &&
+        chain.parent.expression === chain
+      ) {
+        const member = chain.parent;
+        if (
+          !["single", "maybeSingle"].includes(member.name.text) ||
+          !ts.isCallExpression(member.parent) ||
+          member.parent.expression !== member ||
+          member.parent.arguments.length !== 0
+        ) {
+          problems.push("RPC result chain is unsupported");
+          break;
+        }
+        chain = member.parent;
+      }
+      let parent = chain.parent;
+      let awaited = false;
+      while (
+        ts.isAwaitExpression(parent) ||
+        ts.isParenthesizedExpression(parent)
+      ) {
+        if (ts.isAwaitExpression(parent)) awaited = true;
+        parent = parent.parent;
+      }
+      if (
+        !awaited &&
+        !ts.isReturnStatement(parent) &&
+        !(ts.isArrowFunction(parent) && parent.body === chain)
+      )
+        problems.push("RPC query builder escapes its recognized chain");
+      if (kind === "service" && target) rpcCalls.add(target);
+    }
     if (
       n.expression.name.text === "from" &&
       ts.isIdentifier(n.expression.expression) &&
@@ -507,6 +551,10 @@ function scanFile(file, constants) {
         `${a.table}:${a.operation}`.localeCompare(`${b.table}:${b.operation}`),
       ),
       serviceRoleAuthOperations: [...authOperations].sort(),
+      serviceRoleRpcCalls: [...rpcCalls].sort().map((name) => ({
+        function: name,
+        assessment: "potential_privileged_write",
+      })),
       middleware: {
         auth: /\bwithAuth\s*\(/.test(body),
         tenantIsolation: /\bwithTenantIsolation\s*\(/.test(body),

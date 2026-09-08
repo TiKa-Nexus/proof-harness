@@ -707,3 +707,103 @@ it.each([false, true])(
     expect(result.code, result.output).toBe(control ? 0 : 1);
   },
 );
+
+describe("RPC privileged boundaries", () => {
+  it.each([false, true])(
+    "requires evidence without workspace input, internalOnly=%s",
+    (internalOnly) => {
+      fixture({
+        capabilities: [
+          {
+            name: "atomic",
+            module: "widgets",
+            invariants: [],
+            acceptsWorkspaceId: false,
+            internalOnly,
+            serviceRoleRpcCalls: [
+              {
+                function: "atomic_change",
+                assessment: "potential_privileged_write",
+              },
+            ],
+          },
+        ],
+      });
+      const result = runStrict();
+      expect(result.code).toBe(1);
+      expect(result.output).toContain("service_role_action_gap");
+      expect(result.output).toContain("atomic_change");
+    },
+  );
+});
+
+it.each([
+  "complete",
+  "denial-only",
+  "caller-target",
+  "wrong-operation",
+  "accepted-gap",
+])("assesses direct RPC boundary evidence: %s", (mode) => {
+  const action = "widgets:atomic";
+  const target = mode === "caller-target" ? "widgets:webhook" : action;
+  const operation = mode === "wrong-operation" ? "select" : "invoke";
+  fixture({
+    capabilities: [
+      {
+        name: "atomic",
+        module: "widgets",
+        invariants: [],
+        internalOnly: true,
+        acceptsWorkspaceId: false,
+        serviceRoleRpcCalls: [
+          {
+            function: "atomic_change",
+            assessment: "potential_privileged_write",
+          },
+        ],
+      },
+    ],
+    assertions: [
+      {
+        kind: "tenant_isolation",
+        target: "widgets",
+        passed: true,
+        role: "primary",
+        emittedBy: "assert.tenantIsolation",
+      },
+      ...(mode === "accepted-gap"
+        ? []
+        : [
+            {
+              kind: "authorization",
+              target,
+              operation,
+              passed: true,
+              role: "primary",
+            },
+            ...(mode === "denial-only"
+              ? []
+              : [
+                  {
+                    kind: "authorization",
+                    target,
+                    operation,
+                    passed: true,
+                    role: "control",
+                  },
+                ]),
+          ]),
+    ],
+    policy: {
+      schemaVersion: 1,
+      acceptedGaps: [],
+      reviewedUnclassified: [],
+      acceptedActionGaps:
+        mode === "accepted-gap" ? [{ action, reason: "Internal webhook" }] : [],
+    },
+  });
+  const result = runStrict();
+  expect(result.code, result.output).toBe(mode === "complete" ? 0 : 1);
+  if (mode !== "complete")
+    expect(result.output).toContain("service_role_action_gap");
+});

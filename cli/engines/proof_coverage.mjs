@@ -367,17 +367,23 @@ function buildReport() {
   for (const capability of [...(capabilities.capabilities ?? [])].sort((a, b) =>
     `${a.module}:${a.name}`.localeCompare(`${b.module}:${b.name}`),
   )) {
+    const rpcCalls = capability.serviceRoleRpcCalls ?? [];
     if (
-      (capability.acceptsWorkspaceId !== true &&
+      !rpcCalls.length &&
+      ((capability.acceptsWorkspaceId !== true &&
         !(capability.serviceRoleAuthOperations ?? []).length) ||
-      capability.internalOnly === true
+        capability.internalOnly === true)
     ) {
       continue;
     }
 
     const workspaceMutations = capability.serviceRoleMutations ?? [];
     const authOperations = capability.serviceRoleAuthOperations ?? [];
-    if (workspaceMutations.length === 0 && authOperations.length === 0)
+    if (
+      workspaceMutations.length === 0 &&
+      authOperations.length === 0 &&
+      rpcCalls.length === 0
+    )
       continue;
 
     const action = `${capability.module}:${capability.name}`;
@@ -385,6 +391,7 @@ function buildReport() {
       (assertion) =>
         assertion.passed === true &&
         assertion.target === action &&
+        (!rpcCalls.length || assertion.operation === "invoke") &&
         normalizedRole(assertion) === "primary" &&
         denialKinds.has(assertion.kind) &&
         verifiedOrigin(assertion, { isTable: false }),
@@ -393,13 +400,16 @@ function buildReport() {
       (assertion) =>
         assertion.passed === true &&
         assertion.target === action &&
+        (!rpcCalls.length || assertion.operation === "invoke") &&
         normalizedRole(assertion) === "control" &&
         controlKinds.has(assertion.kind),
     );
     const denialProven = denialEvidence.length > 0;
     const controlProven = controlEvidence.length > 0;
     const proven = denialProven && controlProven;
-    const acceptance = acceptedActionGaps.get(action);
+    const acceptance = rpcCalls.length
+      ? undefined
+      : acceptedActionGaps.get(action);
     if (!proven && acceptance) usedActionAcceptances.add(action);
 
     // These targets are now resolved by a derived action requirement.
@@ -410,6 +420,7 @@ function buildReport() {
       tables: [...new Set(workspaceMutations.map((m) => m.table))].sort(),
       mutations: workspaceMutations,
       authOperations,
+      rpcCalls,
       denial: denialProven ? "proven" : "gap",
       control: controlProven ? "proven" : "gap",
       status: proven ? "proven" : acceptance ? "accepted_gap" : "gap",
@@ -599,7 +610,7 @@ function printReport(report) {
     );
     heading(
       "SERVICE-ROLE ACTION BOUNDARIES",
-      "Derived from workspace-targeted service-role writes or privileged Auth operations. Each action needs both an unauthorized/cross-tenant refusal and an allowed-path control; withProof metadata is not consulted.",
+      "Derived from workspace-targeted service-role writes, privileged Auth operations, or service RPC calls (including internal actions). Each action needs both an unauthorized/cross-tenant refusal and an allowed-path control; withProof metadata is not consulted.",
     );
     console.log("");
     printTable(
@@ -611,6 +622,9 @@ function printReport(report) {
             [
               ...r.tables,
               ...r.authOperations.map((op) => `auth.admin.${op}`),
+              ...r.rpcCalls.map(
+                (call) => `rpc.${call.function} (potential write)`,
+              ),
             ].join(","),
         },
         { header: "denial", get: (r) => r.denial },
