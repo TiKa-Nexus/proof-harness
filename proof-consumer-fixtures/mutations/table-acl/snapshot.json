@@ -1,0 +1,1 @@
+{"version":1,"owner":"postgres","entries":[{"column":null,"grantor":"postgres","grantee":"postgres","grantable":false},{"column":"full_name","grantor":"postgres","grantee":"authenticated","grantable":true},{"column":"username","grantor":"postgres","grantee":"authenticated","grantable":false}]}

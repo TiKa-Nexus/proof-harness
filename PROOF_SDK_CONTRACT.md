@@ -1290,3 +1290,13 @@ action-targeted primary denial and allowed control with operation `invoke`,
 including internal actions and actions without workspace inputs. Caller evidence
 is not transitively inherited. See COMPATIBILITY.md for supported syntax and
 remaining unassessable cases.
+
+## Independent scope fixtures (0.1.0-next.12 candidate)
+
+The Playwright entry point exports `IsolationFixture`, `IsolationParticipant`,
+and `TenantIsolationOptions`. `isolationFixture` is an alternative to the legacy
+workspace `setup`/`fixture` options. Its setup and cleanup are consumer-owned;
+clients, ground-truth checks, both owner controls, and both outsider probes stay
+SDK-owned. Missing either side, malformed actors/scopes, failed probes or cleanup
+prevent a passing proof. The SDK does not emit provenance on callback assertions.
+See COMPATIBILITY.md for the public call shape and source-identity requirements.

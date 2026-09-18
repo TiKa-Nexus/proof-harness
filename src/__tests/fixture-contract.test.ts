@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 // Import External Packages
 import { beforeEach, describe, expect, it, vi } from "vitest";
 // Import Local Imports
@@ -104,13 +106,18 @@ vi.mock("../server/service-client", () => ({
     fakeSelectClient("service", serviceRows, { count: true }),
 }));
 
-vi.mock("../playwright/trace", () => ({
-  recordAssertion: (assertion: Record<string, unknown>) =>
-    recorded.push(assertion),
-  withAssertionProvenance: (_helper: string, fn: () => Promise<unknown>) =>
-    fn(),
-  withoutAssertionProvenance: (fn: () => Promise<unknown>) => fn(),
-}));
+vi.mock("../playwright/trace", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../playwright/trace")>();
+  return {
+    ...actual,
+    recordAssertion: (
+      assertion: import("../shared/trace-types").TraceAssertion,
+    ) => {
+      recorded.push(assertion as unknown as Record<string, unknown>);
+      actual.recordAssertion(assertion);
+    },
+  };
+});
 
 const supabaseClient = vi.fn();
 const loginAs = vi.fn();
@@ -437,4 +444,205 @@ it("fails visibly when fixture cleanup fails", async () => {
     proofAssert.tenantIsolation({ table: "widgets", setup: async () => {} }),
   ).rejects.toThrow(/fixture_cleanup/);
   expect(deleteUser).toHaveBeenCalledTimes(2);
+});
+
+describe("caller-owned isolation fixture", () => {
+  function options(column = "account_id") {
+    serviceRows = [
+      { id: "row-a", [column]: "a" },
+      { id: "row-b", [column]: "b" },
+    ];
+    supabaseClient.mockImplementation(async ({ email }) =>
+      fakeSelectClient(
+        email,
+        serviceRows.filter(
+          (r) => r[column] === (email === "a@proof.test" ? "a" : "b"),
+        ),
+      ),
+    );
+    return {
+      table: "widgets",
+      scopeColumn: column,
+      isolationFixture: {
+        id: "widgets-v1",
+        table: "widgets",
+        setup: vi.fn(async () => ({
+          a: {
+            actor: { email: "a@proof.test", password: "a" },
+            scopeValue: "a",
+          },
+          b: {
+            actor: { email: "b@proof.test", password: "b" },
+            scopeValue: "b",
+          },
+        })),
+        cleanup: vi.fn(async () => undefined),
+      },
+    };
+  }
+  it.each(["account_id", "user_id"])(
+    "proves both directions for %s without workspace resources",
+    async (column) => {
+      const opts = options(column);
+      await proofAssert.tenantIsolation(opts);
+      expect(primaryAssertions().filter((a) => a.passed)).toHaveLength(2);
+      expect(controlAssertions().filter((a) => a.passed)).toHaveLength(2);
+      expect(workspaceIndex).toBe(0);
+      expect(userIndex).toBe(0);
+      expect(opts.isolationFixture.cleanup).toHaveBeenCalledOnce();
+    },
+  );
+  it.each(["empty", "blocked", "leak", "malformed", "cleanup"])(
+    "fails closed for %s",
+    async (mode) => {
+      const opts = options();
+      if (mode === "empty") serviceRows = serviceRows.slice(0, 1);
+      if (mode === "blocked")
+        supabaseClient.mockImplementation(async () =>
+          fakeSelectClient("blocked", []),
+        );
+      if (mode === "leak")
+        supabaseClient.mockImplementation(async () =>
+          fakeSelectClient("leak", serviceRows),
+        );
+      if (mode === "malformed")
+        opts.isolationFixture.setup.mockResolvedValue({
+          a: { actor: { email: "a", password: "a" }, scopeValue: "same" },
+          b: { actor: { email: "b", password: "b" }, scopeValue: "same" },
+        });
+      if (mode === "cleanup")
+        opts.isolationFixture.cleanup.mockRejectedValue(
+          new Error("cleanup failed"),
+        );
+      await expect(proofAssert.tenantIsolation(opts)).rejects.toThrow();
+      expect(opts.isolationFixture.cleanup).toHaveBeenCalledOnce();
+      if (mode === "blocked")
+        expect(controlAssertions().some((a) => !a.passed)).toBe(true);
+      if (mode === "cleanup")
+        expect(primaryAssertions().some((a) => a.status === "incomplete")).toBe(
+          true,
+        );
+    },
+  );
+  it("preserves SDK provenance while setup and cleanup assertions remain caller-owned", async () => {
+    const { trace, recordAssertion } = await import("../playwright/trace");
+    const directory = fs.mkdtempSync(
+      path.join(process.cwd(), ".proof-isolation-"),
+    );
+    const previous = process.env.PROOF_TRACES_DIR;
+    process.env.PROOF_TRACES_DIR = directory;
+    const opts = options();
+    const setup = opts.isolationFixture.setup;
+    const forged = () =>
+      recordAssertion({
+        kind: "tenant_isolation",
+        target: "forged",
+        operation: "select",
+        role: "primary",
+        passed: true,
+        emittedBy: "assert.tenantIsolation",
+      });
+    opts.isolationFixture.setup = vi.fn(async () => {
+      forged();
+      const sides = await setup();
+      return {
+        ...sides,
+        a: {
+          ...sides.a,
+          get actor() {
+            forged();
+            return sides.a.actor;
+          },
+        },
+      };
+    });
+    opts.isolationFixture.cleanup = vi.fn(async () => {
+      forged();
+    });
+    try {
+      await trace.proof("custom-isolation", async (t) => {
+        await t.step(
+          {
+            kind: "tenant_isolation",
+            target: "widgets",
+            intent: "independent scopes",
+          },
+          async () => proofAssert.tenantIsolation(opts),
+        );
+      });
+      const artifact = JSON.parse(
+        fs.readFileSync(path.join(directory, "custom-isolation.json"), "utf8"),
+      );
+      const assertions = artifact.steps[0].assertions;
+      expect(
+        assertions
+          .filter(
+            (a: { target: string; emittedBy?: string }) =>
+              a.target === "forged",
+          )
+          .every((a: { emittedBy?: string }) => a.emittedBy === undefined),
+      ).toBe(true);
+      expect(
+        assertions
+          .filter((a: { target: string }) => a.target === "widgets")
+          .every(
+            (a: { emittedBy?: string }) =>
+              a.emittedBy === "assert.tenantIsolation",
+          ),
+      ).toBe(true);
+      expect(artifact.sourceHash).toBeTruthy();
+      expect(
+        assertions.some((a: { detail?: string }) =>
+          a.detail?.includes("widgets-v1"),
+        ),
+      ).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.PROOF_TRACES_DIR;
+      else process.env.PROOF_TRACES_DIR = previous;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  it("detects a reverse-direction leak and a partially blocked owner", async () => {
+    const opts = options();
+    supabaseClient.mockImplementation(async ({ email }) =>
+      fakeSelectClient(
+        email,
+        email === "a@proof.test"
+          ? serviceRows
+          : serviceRows.filter((r) => r.account_id === "b"),
+      ),
+    );
+    await expect(proofAssert.tenantIsolation(opts)).rejects.toThrow(
+      "tenant_isolation",
+    );
+    expect(primaryAssertions().some((a) => a.passed === false)).toBe(true);
+    recorded.length = 0;
+    const partial = options();
+    serviceRows.push({ id: "row-a2", account_id: "a" });
+    supabaseClient.mockImplementation(async ({ email }) =>
+      fakeSelectClient(
+        email,
+        serviceRows
+          .filter(
+            (r) => r.account_id === (email === "a@proof.test" ? "a" : "b"),
+          )
+          .slice(0, 1),
+      ),
+    );
+    await expect(proofAssert.tenantIsolation(partial)).rejects.toThrow(
+      "tenant_isolation_control",
+    );
+  });
+  it("cleans partial setup and rejects mismatched table identity", async () => {
+    const opts = options();
+    opts.isolationFixture.setup.mockRejectedValue(new Error("partial setup"));
+    await expect(proofAssert.tenantIsolation(opts)).rejects.toThrow(
+      "partial setup",
+    );
+    expect(opts.isolationFixture.cleanup).toHaveBeenCalledOnce();
+    opts.isolationFixture.table = "other";
+    await expect(proofAssert.tenantIsolation(opts)).rejects.toThrow(
+      "malformed fixture",
+    );
+  });
 });

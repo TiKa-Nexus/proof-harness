@@ -29,6 +29,17 @@ jobs:
         run: pnpm test
       - name: Consumer conformance
         run: pnpm conformance
+      - name: PostgreSQL ACL mutation and recovery regression
+        env:
+          PROOF_ACL_TEST_CONTAINER: supabase_db_proof_acl_ci
+        run: |
+          docker run -d --name "$PROOF_ACL_TEST_CONTAINER" --network none -e POSTGRES_PASSWORD=proof-local-only postgres:17
+          trap 'docker rm -f "$PROOF_ACL_TEST_CONTAINER"' EXIT
+          for attempt in $(seq 1 30); do
+            if docker exec "$PROOF_ACL_TEST_CONTAINER" pg_isready -U postgres; then break; fi
+            sleep 1
+          done
+          pnpm exec vitest run conformance/table-acl-runner.test.ts
       - name: Package contents and clean consumer
         run: pnpm pack:check
       - name: Verify install tree and repository cleanliness

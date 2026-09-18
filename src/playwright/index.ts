@@ -7,3 +7,9 @@
 export { actAsUser } from "./actAsUser";
 export { assert } from "./assert";
 export { trace, recordAssertion } from "./trace";
+
+export type {
+  IsolationFixture,
+  IsolationParticipant,
+  TenantIsolationOptions,
+} from "./assert";
