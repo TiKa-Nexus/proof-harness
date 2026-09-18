@@ -152,7 +152,11 @@ Release `0.1.0-next.10` restores explicit consumer primary assertions
 for mutation detection while retaining strict control provenance. See the
 [next.10 migration notes](COMPATIBILITY.md) before adopting it.
 
-Release candidate `0.1.0-next.11` discovers direct service RPC calls as potentially
+Release `0.1.0-next.11` discovers direct service RPC calls as potentially
 privileged writes and requires action-boundary evidence even without workspace
 inputs or for internal actions. See [required migration steps](COMPATIBILITY.md)
-before adopting the exact version after publication.
+before adopting the exact version.
+
+Release candidate `0.1.0-next.12` adds caller-owned account/user isolation fixtures
+and restores column grants and grant options after table-privilege mutations.
+Keep existing pins until publication; see [migration requirements](COMPATIBILITY.md).

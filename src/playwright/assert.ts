@@ -146,7 +146,7 @@ interface TenantIsolationBaseOptions {
    *
    * Tables classified `user_scoped` in `.proof/schema.json` need `"user"`.
    */
-  scope?: "workspace" | "user";
+  scope?: "workspace" | "user" | "account";
   /**
    * Column carrying the scope value. Defaults to `workspace_id` for workspace
    * scope and `user_id` for user scope.
@@ -239,9 +239,30 @@ function validateTenantIsolationCriterion(
  * until the builder knows the final constraints. Supplying both is rejected by
  * the type system so there is one source of fixture truth.
  */
+export interface IsolationParticipant {
+  actor: { email: string; password: string };
+  scopeValue: string;
+}
+
+/** Caller owns all resources, including cleanup after partially failed setup. */
+export interface IsolationFixture {
+  id: string;
+  table: string;
+  setup(): Promise<{ a: IsolationParticipant; b: IsolationParticipant }>;
+  cleanup(): Promise<void>;
+}
+
 export type TenantIsolationOptions = TenantIsolationBaseOptions &
   (
     | {
+        isolationFixture: IsolationFixture;
+        scopeColumn: string;
+        page?: never;
+        setup?: never;
+        fixture?: never;
+      }
+    | {
+        isolationFixture?: never;
         /**
          * Inline setup for an already-known schema. It must create at least one
          * row for side A; side B is optional but required for a bidirectional
@@ -253,6 +274,7 @@ export type TenantIsolationOptions = TenantIsolationBaseOptions &
     | {
         /** Explicit table-owned factory from `e2e/fixtures/<table>.ts`. */
         fixture: ProofFixtureFactory;
+        isolationFixture?: never;
         setup?: never;
       }
   );
@@ -1077,11 +1099,12 @@ async function countRowsAsService(
 }
 
 async function probeTenantIsolation(args: {
+  strictOwner?: boolean;
   table: string;
-  viewer: SeedUser;
+  viewer: Pick<SeedUser, "email" | "password">;
   viewerLabel: string;
   /** Owner of the isolated rows; drives the positive control. */
-  owner: SeedUser;
+  owner: Pick<SeedUser, "email" | "password">;
   ownerLabel: string;
   /** Column + value identifying the tenant whose rows must stay hidden. */
   scopeColumn: string;
@@ -1150,7 +1173,11 @@ async function probeTenantIsolation(args: {
       ownError.message,
     );
 
-  if (ownError || (ownRows?.length ?? 0) === 0) {
+  if (
+    ownError ||
+    (ownRows?.length ?? 0) === 0 ||
+    (args.strictOwner && ownRows?.length !== actualRowCount)
+  ) {
     recordAssertion({
       kind: "tenant_isolation",
       target: table,
@@ -1202,6 +1229,22 @@ async function probeTenantIsolation(args: {
     `the outsider's SELECT on ${table}`,
   );
 
+  if (queryError && args.strictOwner) {
+    recordAssertion({
+      kind: "tenant_isolation",
+      target: table,
+      operation: "select",
+      passed: false,
+      status: "incomplete",
+      role: "primary",
+      detail: `outsider query failed before isolation could be assessed: ${queryError.message}`,
+    });
+    throw proofFail(
+      "tenant_isolation_setup",
+      "a successful outsider query returning no rows",
+      queryError.message,
+    );
+  }
   if (queryError) {
     recordAssertion({
       kind: "tenant_isolation",
@@ -1391,6 +1434,152 @@ const assertMethods = {
    */
   async tenantIsolation(opts: TenantIsolationOptions): Promise<void> {
     const { table, page } = opts;
+    if (opts.isolationFixture) {
+      const fixture = await withoutAssertionProvenance(async () => {
+        const supplied = opts.isolationFixture!;
+        return {
+          id: supplied.id,
+          table: supplied.table,
+          setup:
+            typeof supplied.setup === "function"
+              ? supplied.setup.bind(supplied)
+              : supplied.setup,
+          cleanup:
+            typeof supplied.cleanup === "function"
+              ? supplied.cleanup.bind(supplied)
+              : supplied.cleanup,
+        };
+      });
+      if (page)
+        throw proofFail(
+          "tenant_isolation_setup",
+          "a database-only caller-owned fixture",
+          "page is unsupported for isolationFixture",
+        );
+      if (
+        !fixture.id?.trim() ||
+        fixture.table !== table ||
+        !opts.scopeColumn?.trim() ||
+        typeof fixture.setup !== "function" ||
+        typeof fixture.cleanup !== "function"
+      )
+        throw proofFail(
+          "tenant_isolation_setup",
+          "a named, table-matched isolation fixture and scope column",
+          "malformed fixture",
+        );
+      validateTenantIsolationCriterion(table, opts.scopeColumn, opts.criterion);
+      const failures: unknown[] = [];
+      try {
+        const participants = await withoutAssertionProvenance(async () => {
+          const sides = await fixture.setup();
+          const valid = (side: IsolationParticipant) =>
+            side &&
+            typeof side.scopeValue === "string" &&
+            side.scopeValue.trim() &&
+            typeof side.actor?.email === "string" &&
+            side.actor.email.trim() &&
+            typeof side.actor?.password === "string" &&
+            side.actor.password.length;
+          if (
+            !sides ||
+            !valid(sides.a) ||
+            !valid(sides.b) ||
+            sides.a.scopeValue === sides.b.scopeValue ||
+            sides.a.actor.email.toLowerCase() ===
+              sides.b.actor.email.toLowerCase()
+          )
+            throw proofFail(
+              "tenant_isolation_setup",
+              "two distinct actors and scope values",
+              "malformed isolation participants",
+            );
+          // Copy primitive inputs before running probes; caller callbacks never own the SDK client.
+          return [sides.a, sides.b].map((side) => ({
+            scopeValue: side.scopeValue,
+            actor: { email: side.actor.email, password: side.actor.password },
+          }));
+        });
+        const sb = createProofServiceClient();
+        // Both directions must have actual rows before recording any passing isolation assertion.
+        for (const side of participants) {
+          const count = await countRowsAsService(sb, table, {
+            [opts.scopeColumn]: side.scopeValue,
+            ...(opts.criterion?.where ?? {}),
+          });
+          if (!count)
+            throw proofFail(
+              "tenant_isolation_vacuous",
+              "existing rows for both isolation participants",
+              `empty side in fixture ${fixture.id}`,
+            );
+        }
+        for (const [owner, viewer] of [
+          [participants[0], participants[1]],
+          [participants[1], participants[0]],
+        ]) {
+          const outcome = await probeTenantIsolation({
+            table,
+            owner: owner.actor,
+            viewer: viewer.actor,
+            ownerLabel: `fixture ${fixture.id} owner`,
+            viewerLabel: `fixture ${fixture.id} outsider`,
+            scopeColumn: opts.scopeColumn,
+            scopeValue: owner.scopeValue,
+            scopeLabel: owner.scopeValue,
+            criterion: opts.criterion,
+            scopePattern: "the consumer-owned owner/account policy",
+            sb,
+            strictOwner: true,
+          });
+          if (outcome !== "proved")
+            throw proofFail(
+              "tenant_isolation_vacuous",
+              "existing target rows throughout both probes",
+              "rows disappeared",
+            );
+        }
+      } catch (error) {
+        recordAssertion({
+          kind: "tenant_isolation",
+          target: table,
+          operation: "select",
+          passed: false,
+          status: "incomplete",
+          role: "primary",
+          detail: `fixture ${fixture.id} did not complete both isolation directions`,
+        });
+        failures.push(error);
+      } finally {
+        try {
+          await withoutAssertionProvenance(() => fixture.cleanup());
+        } catch (error) {
+          recordAssertion({
+            kind: "tenant_isolation",
+            target: table,
+            operation: "select",
+            passed: false,
+            status: "incomplete",
+            role: "primary",
+            detail: `fixture ${fixture.id} cleanup failed`,
+          });
+          failures.push(error);
+        }
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(
+          failures,
+          "Isolation probe and cleanup failed",
+        );
+      return;
+    }
+    if (opts.scope === "account")
+      throw proofFail(
+        "tenant_isolation_setup",
+        "isolationFixture for account scope",
+        "workspace fixture selected",
+      );
     const tag = opts.tag ?? randomSuffix();
     const scope = opts.scope ?? "workspace";
     const scopeColumn =

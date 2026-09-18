@@ -27,9 +27,70 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
-### 0.1.0-next.11 (release candidate) — conservative service RPC assessment
+### 0.1.0-next.12 — independent isolation fixtures and column ACL recovery (candidate)
 
-Prepared for release. After publication, pin exactly `proof-harness@0.1.0-next.11`.
+Not yet published. Keep the existing consumer pin until this release is reviewed
+and published; then pin exactly `proof-harness@0.1.0-next.12`.
+
+`assert.tenantIsolation` now accepts a caller-owned `isolationFixture` instead of
+workspace seeding. Supply a stable fixture `id`, the matching `table`, an explicit
+`scopeColumn`, `setup()` returning two distinct actors and scope values, and
+`cleanup()` that can handle partial setup. Scope values can be user IDs or
+independent account IDs. `scope: "account"` requires this fixture path. Existing
+workspace fixtures and their reverse-direction behavior remain unchanged.
+
+```ts
+await assert.tenantIsolation({
+  table: "notifications",
+  scope: "account",
+  scopeColumn: "account_id",
+  isolationFixture: {
+    id: "notifications-two-accounts-v1",
+    table: "notifications",
+    async setup() {
+      // Consumer creates real Auth customers, resolves account IDs, and seeds rows.
+      return {
+        a: { actor: { email: ownerA.email, password: ownerA.password }, scopeValue: accountA.id },
+        b: { actor: { email: ownerB.email, password: ownerB.password }, scopeValue: accountB.id },
+      };
+    },
+    async cleanup() { await cleanupOwnedResources(); },
+  },
+});
+```
+
+The SDK creates the service client and authenticated probe clients itself. Both
+sides must contain rows before probing; each owner must read all scoped rows,
+and each outsider must see none. Both directions are mandatory. Scope/criterion
+filters apply identically to ground truth and probes. Setup and cleanup run
+without helper provenance; callers cannot stamp SDK assertions. Cleanup errors
+fail the proof. Fixture IDs appear in probe detail; existing trace source hashes
+bind tracked and nonignored fixture source to evidence. Keep fixtures under the
+consumer's source identity, not an excluded artifact directory. This path is
+database-only: `page` is unsupported. It does not extend account-policy SQL
+classification; existing explicit classifier reviews remain separate.
+
+`tablePrivilege` mutations now snapshot the relevant table and column ACL entries
+(including grant options) and compare that complete state after restoration.
+Column UPDATE grants removed by PostgreSQL's table REVOKE are re-established.
+Owner-issued direct grants, including grant options, are supported; delegated
+grant graphs, inherited/PUBLIC effective privileges, and owner-target mutations
+remain blocked before planting. No CASCADE recovery is used. Recovery fails
+closed on an old Boolean snapshot: it cannot reconstruct already-lost column
+grants. Keep that journal and reconcile with the protected baseline rather than
+claiming automatic recovery succeeded.
+
+After upgrading: port fixtures to the public API, regenerate baseline evidence,
+restore formal table-isolation coverage, and rerun frozen install, static/unit/
+browser checks, the full proof/mutation/control gate, package parity, production
+build, and smoke. Verify actual profile editing and denied privileged-column
+writes after mutations. Package tests are not a substitute for that consumer run.
+Trace, mission, and health protocol versions remain unchanged; the internal
+ACL recovery snapshot has its own version 1.
+
+### 0.1.0-next.11 — conservative service RPC assessment
+
+Published release. Pin exactly `proof-harness@0.1.0-next.11`.
 Regenerate
 capabilities and rerun the complete baseline, coverage, inventory, and mutation
 validation after adoption. Trace, mission, and health versions are unchanged.

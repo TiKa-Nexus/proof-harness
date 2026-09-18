@@ -53,3 +53,21 @@ workflow. Documentation-only contributions do not need a version bump. The
 maintainer handles publishing and the required environment approval.
 
 Contributions are under the repository's [Apache-2.0 license](./LICENSE).
+
+## PostgreSQL ACL regression
+
+CI starts a disposable PostgreSQL 17 container and runs
+`conformance/table-acl-runner.test.ts`. It verifies a real mutation, forced engine
+termination, recovery, exact ACL comparison, and a working column UPDATE.
+The test is skipped unless `PROOF_ACL_TEST_CONTAINER` is set. To run locally,
+start a dedicated container named `supabase_db_proof_acl_test` (not a consumer's
+Supabase database), wait until PostgreSQL is ready, then run:
+
+```sh
+PROOF_ACL_TEST_CONTAINER=supabase_db_proof_acl_test pnpm exec vitest run conformance/table-acl-runner.test.ts
+```
+
+Use the `postgres:17` image with a local test password and `--network none`.
+The test creates and drops `public.acl_fixture` and `proof_acl_reader`. Stop and
+remove the disposable container afterwards. Do not point this regression at
+an application database.

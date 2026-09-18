@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 import {
+  tableAclSnapshotSql,
+  validateTableAcl,
+  restoreTableAclSql,
+} from "./proof_table_acl.mjs";
+import {
   validateControlBaseline,
   assertionSelectorsTurnedRed,
 } from "./proof_control_sensitivity.mjs";
@@ -234,13 +239,13 @@ function assertDirectPrivilege(container, subject, functionSubject = false) {
     `SELECT NOT EXISTS (
     SELECT 1 FROM ${catalog} c, LATERAL aclexplode(coalesce(c.${acl},acldefault('${defaultKind}',c.${owner}))) a
     WHERE c.oid = ${object} AND a.privilege_type = ${quoteLiteral(subject.privilege.toUpperCase())}
-      AND ((a.grantee = ${quoteLiteral(subject.role)}::regrole AND (a.is_grantable OR a.grantor <> c.${owner}))
+      AND ((a.grantee = ${quoteLiteral(subject.role)}::regrole AND (${functionSubject ? "a.is_grantable OR " : ""}a.grantor <> c.${owner}))
         OR (a.grantee <> ${quoteLiteral(subject.role)}::regrole AND (a.grantee = 0 OR pg_has_role(${quoteLiteral(subject.role)},a.grantee,'USAGE'))))
   ) AND NOT EXISTS (SELECT 1 FROM ${catalog} WHERE oid = ${object} AND ${owner} = ${quoteLiteral(subject.role)}::regrole)`,
   );
   if (supported !== "t")
     throw new Error(
-      "[PROOF_FAIL] mutation_unassessed: privilege restoration supports owner-issued direct grants without grant options; inherited, PUBLIC, and owner privileges require a dedicated catalog mutation",
+      `[PROOF_FAIL] mutation_unassessed: privilege restoration requires owner-issued direct grants${functionSubject ? " without grant options" : ""}; inherited, PUBLIC, and owner privileges require a dedicated catalog mutation`,
     );
 }
 
@@ -314,17 +319,13 @@ const SUBJECTS = {
   },
 
   tablePrivilege: {
-    preflight: (container, s) => assertDirectPrivilege(container, s),
+    preflight: (container, s) => {
+      assertDirectPrivilege(container, s);
+      validateTableAcl(queryScalar(container, tableAclSnapshotSql(s)));
+    },
     describe: (s) => `${s.privilege} on ${s.table} for ${s.role}`,
-    snapshot: (container, s) =>
-      queryScalar(
-        container,
-        `SELECT has_table_privilege(${quoteLiteral(s.role)}, ${quoteLiteral(s.table)}, ${quoteLiteral(s.privilege)})`,
-      ),
-    restore: (s, snapshot) =>
-      snapshot === "t"
-        ? `GRANT ${s.privilege} ON ${s.table} TO ${s.role};`
-        : `REVOKE ${s.privilege} ON ${s.table} FROM ${s.role};`,
+    snapshot: (container, s) => queryScalar(container, tableAclSnapshotSql(s)),
+    restore: restoreTableAclSql,
   },
 
   functionPrivilege: {
