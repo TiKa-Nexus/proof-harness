@@ -27,10 +27,29 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
-### 0.1.0-next.12 — independent isolation fixtures and column ACL recovery (candidate)
+### 0.1.0-next.13 — column-restricted tenant isolation (release candidate)
 
-Not yet published. Keep the existing consumer pin until this release is reviewed
-and published; then pin exactly `proof-harness@0.1.0-next.12`.
+Prepared for release. After publication, pin exactly `proof-harness@0.1.0-next.13`
+and update the lockfile. Add `columns` only where column grants require it, then
+rerun the baseline, coverage, mutation and control checks against the real database.
+Existing consumers that omit this option need no API changes.
+
+`assert.tenantIsolation` accepts optional `columns: ["id", "account_id"]` for
+private tables that grant customers only selected columns. The SDK uses the
+same projection for service ground truth, owner controls, and outsider probes.
+Only distinct plain column names are allowed; empty lists, wildcards, aliases,
+aggregates, casts and joins are rejected before fixture setup. Omitting the
+option retains the existing all-column query.
+
+This proves row isolation for the selected columns. Consumers must separately
+prove that private columns remain unreadable; do not grant extra columns to
+make a fixture pass. Existing positive-control, bidirectional, non-vacuity and
+provenance requirements are unchanged. No trace, mission, or health protocol migration is
+required. Adopt only an exact reviewed published package version.
+
+### 0.1.0-next.12 — independent isolation fixtures and column ACL recovery
+
+Published release. Pin exactly `proof-harness@0.1.0-next.12` when adopting these changes.
 
 `assert.tenantIsolation` now accepts a caller-owned `isolationFixture` instead of
 workspace seeding. Supply a stable fixture `id`, the matching `table`, an explicit
@@ -521,19 +540,3 @@ that `cleanup` removes) must now declare `applyDoesNotChangeSubject: true`;
 runs with such undeclared mutations fail until the flag is added. The shared
 dev server is also started before the first defect is planted rather than
 inside the first mutation's window.
-
-
-## Unreleased: column-restricted tenant isolation
-
-`assert.tenantIsolation` accepts optional `columns: ["id", "account_id"]` for
-private tables that grant customers only selected columns. The SDK uses the
-same projection for service ground truth, owner controls, and outsider probes.
-Only distinct plain column names are allowed; empty lists, wildcards, aliases,
-aggregates, casts and joins are rejected before fixture setup. Omitting the
-option retains the existing all-column query.
-
-This proves row isolation for the selected columns. Consumers must separately
-prove that private columns remain unreadable; do not grant extra columns to
-make a fixture pass. Existing positive-control, bidirectional, non-vacuity and
-provenance requirements are unchanged. No trace or mission schema migration is
-required. Adopt only an exact reviewed published package version.

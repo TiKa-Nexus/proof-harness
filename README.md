@@ -157,6 +157,10 @@ privileged writes and requires action-boundary evidence even without workspace
 inputs or for internal actions. See [required migration steps](COMPATIBILITY.md)
 before adopting the exact version.
 
-Release candidate `0.1.0-next.12` adds caller-owned account/user isolation fixtures
+Release `0.1.0-next.12` adds caller-owned account/user isolation fixtures
 and restores column grants and grant options after table-privilege mutations.
-Keep existing pins until publication; see [migration requirements](COMPATIBILITY.md).
+See [migration requirements](COMPATIBILITY.md).
+
+Release candidate `0.1.0-next.13` adds optional readable-column selection to
+`assert.tenantIsolation` for tables with column grants. Private-column denial
+remains a separate consumer proof; see [migration requirements](COMPATIBILITY.md).
