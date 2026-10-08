@@ -34,6 +34,8 @@ const users = [
   },
 ];
 
+const projections: Array<{ client: string; selection: string }> = [];
+let columnRestricted = false;
 let workspaceIndex = 0;
 let userIndex = 0;
 let serviceRows: Array<Record<string, unknown>> = [];
@@ -60,7 +62,12 @@ function fakeSelectClient(
   return {
     from(table: string) {
       return {
-        select() {
+        select(selection = "*") {
+          projections.push({ client, selection });
+          const forbidden =
+            columnRestricted &&
+            client !== "service" &&
+            selection !== "id,account_id";
           const call = { client, table, filter: {} as Record<string, unknown> };
           queryCalls.push(call);
           const builder = {
@@ -78,10 +85,12 @@ function fakeSelectClient(
             ) {
               const matched = matchingRows(rows, call.filter);
               return Promise.resolve({
-                data: count ? null : matched,
+                data: forbidden || count ? null : matched,
                 count: count ? matched.length : null,
-                error: null,
-                status: 200,
+                error: forbidden
+                  ? { code: "42501", message: "column permission denied" }
+                  : null,
+                status: forbidden ? 403 : 200,
               }).then(onfulfilled, onrejected);
             },
           };
@@ -141,6 +150,8 @@ beforeEach(() => {
   userIndex = 0;
   serviceRows = [];
   queryCalls.length = 0;
+  projections.length = 0;
+  columnRestricted = false;
   supabaseClient.mockReset();
   loginAs.mockReset();
   logout.mockClear();
@@ -480,6 +491,63 @@ describe("caller-owned isolation fixture", () => {
       },
     };
   }
+  it("uses readable columns consistently while preserving both owner controls and denials", async () => {
+    const opts = options();
+    columnRestricted = true;
+    await proofAssert.tenantIsolation({
+      ...opts,
+      columns: ["id", "account_id"],
+    });
+    expect(primaryAssertions().filter((a) => a.passed)).toHaveLength(2);
+    expect(controlAssertions().filter((a) => a.passed)).toHaveLength(2);
+    expect(projections).toHaveLength(8);
+    expect(projections.every((p) => p.selection === "id,account_id")).toBe(
+      true,
+    );
+  });
+  it("retains default all-column behavior and refuses an unreadable owner projection", async () => {
+    const opts = options();
+    columnRestricted = true;
+    await expect(proofAssert.tenantIsolation(opts)).rejects.toThrow(
+      /tenant_isolation_control/,
+    );
+    expect(primaryAssertions().some((a) => a.passed)).toBe(false);
+  });
+  it.each(["blocked", "leak"])(
+    "selected columns still detect %s access",
+    async (mode) => {
+      const opts = options();
+      columnRestricted = true;
+      supabaseClient.mockImplementation(async () =>
+        fakeSelectClient(mode, mode === "leak" ? serviceRows : []),
+      );
+      await expect(
+        proofAssert.tenantIsolation({ ...opts, columns: ["id", "account_id"] }),
+      ).rejects.toThrow(
+        mode === "blocked" ? /tenant_isolation_control/ : /tenant_isolation/,
+      );
+      expect(opts.isolationFixture.cleanup).toHaveBeenCalledOnce();
+    },
+  );
+  it.each(
+    [
+      [],
+      ["*"],
+      ["id", "id"],
+      ["id,count()"],
+      ["alias:id"],
+      ["other(id)"],
+      ["id::text"],
+      ["id "],
+    ].map((columns) => ({ columns })),
+  )("rejects unsafe or ambiguous projections $columns", async ({ columns }) => {
+    const opts = options();
+    await expect(
+      proofAssert.tenantIsolation({ ...opts, columns }),
+    ).rejects.toThrow(/tenant_isolation_setup/);
+    expect(opts.isolationFixture.setup).not.toHaveBeenCalled();
+    expect(projections).toHaveLength(0);
+  });
   it.each(["account_id", "user_id"])(
     "proves both directions for %s without workspace resources",
     async (column) => {

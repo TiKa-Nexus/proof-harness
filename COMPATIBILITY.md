@@ -521,3 +521,19 @@ that `cleanup` removes) must now declare `applyDoesNotChangeSubject: true`;
 runs with such undeclared mutations fail until the flag is added. The shared
 dev server is also started before the first defect is planted rather than
 inside the first mutation's window.
+
+
+## Unreleased: column-restricted tenant isolation
+
+`assert.tenantIsolation` accepts optional `columns: ["id", "account_id"]` for
+private tables that grant customers only selected columns. The SDK uses the
+same projection for service ground truth, owner controls, and outsider probes.
+Only distinct plain column names are allowed; empty lists, wildcards, aliases,
+aggregates, casts and joins are rejected before fixture setup. Omitting the
+option retains the existing all-column query.
+
+This proves row isolation for the selected columns. Consumers must separately
+prove that private columns remain unreadable; do not grant extra columns to
+make a fixture pass. Existing positive-control, bidirectional, non-vacuity and
+provenance requirements are unchanged. No trace or mission schema migration is
+required. Adopt only an exact reviewed published package version.
