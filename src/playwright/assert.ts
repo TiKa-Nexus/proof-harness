@@ -127,6 +127,10 @@ function failIfInfrastructure(
 // tenant isolation checks: it bypasses Playwright entirely.
 
 interface TenantIsolationBaseOptions {
+  /** Plain readable column names for column-restricted tables. Defaults to all
+   * columns. The same projection is used for ground truth and both actors.
+   * This proves row isolation only; test secret-column denial separately. */
+  columns?: readonly string[];
   /**
    * Table to query as userB. RLS on the table is what is being tested.
    * Must be a table governed by a tenant-scoped RLS policy — either
@@ -1071,6 +1075,28 @@ async function runRlsProbe(
  */
 type IsolationProbeOutcome = "proved" | "skipped_no_data";
 
+function tenantColumnSelection(
+  columns: TenantIsolationBaseOptions["columns"],
+): string {
+  if (columns === undefined) return "*";
+  if (
+    !Array.isArray(columns) ||
+    columns.length === 0 ||
+    columns.some(
+      (column) =>
+        typeof column !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(column),
+    ) ||
+    new Set(columns).size !== columns.length
+  ) {
+    throw proofFail(
+      "tenant_isolation_setup",
+      "a non-empty list of distinct plain column names",
+      "invalid tenant column projection",
+    );
+  }
+  return columns.join(",");
+}
+
 /**
  * Count the rows belonging to one tenant using the service role, bypassing RLS.
  * This is the ground truth the probe is measured against.
@@ -1079,9 +1105,10 @@ async function countRowsAsService(
   sb: SupabaseClient,
   table: string,
   filter: Record<string, unknown>,
+  selection: string,
 ): Promise<number> {
   const { count, error } = await applyEq(
-    sb.from(table).select("*", { count: "exact", head: true }),
+    sb.from(table).select(selection, { count: "exact", head: true }),
     filter,
   );
 
@@ -1099,6 +1126,7 @@ async function countRowsAsService(
 }
 
 async function probeTenantIsolation(args: {
+  selection: string;
   strictOwner?: boolean;
   table: string;
   viewer: Pick<SeedUser, "email" | "password">;
@@ -1133,14 +1161,21 @@ async function probeTenantIsolation(args: {
     [scopeColumn]: scopeValue,
     ...(criterion?.where ?? {}),
   };
-  const criterionDetail = criterion
-    ? ` matching planner criterion "${criterion.description}" (${JSON.stringify(criterion.where)})`
-    : "";
+  const criterionDetail =
+    (criterion
+      ? ` matching planner criterion "${criterion.description}" (${JSON.stringify(criterion.where)})`
+      : "") +
+    (args.selection === "*" ? "" : ` selecting columns ${args.selection}`);
 
   // ---- Ground truth: is there anything here to leak? ----------------------
   // Without this, "the outsider saw 0 rows" is unfalsifiable — an empty table
   // produces exactly the same observation as perfectly-enforced RLS.
-  const actualRowCount = await countRowsAsService(sb, table, filter);
+  const actualRowCount = await countRowsAsService(
+    sb,
+    table,
+    filter,
+    args.selection,
+  );
   if (actualRowCount === 0) {
     return "skipped_no_data";
   }
@@ -1158,7 +1193,7 @@ async function probeTenantIsolation(args: {
     data: ownRows,
     error: ownError,
     status: ownStatus,
-  } = await applyEq(ownerClient.from(table).select("*"), filter);
+  } = await applyEq(ownerClient.from(table).select(args.selection), filter);
   failIfInfrastructure(
     ownError,
     ownStatus,
@@ -1221,7 +1256,7 @@ async function probeTenantIsolation(args: {
     data: leakedRows,
     error: queryError,
     status: queryStatus,
-  } = await applyEq(client.from(table).select("*"), filter);
+  } = await applyEq(client.from(table).select(args.selection), filter);
   failIfInfrastructure(
     queryError,
     queryStatus,
@@ -1267,7 +1302,9 @@ async function probeTenantIsolation(args: {
   if (leakedRows && leakedRows.length > 0) {
     const sampleIds = leakedRows
       .slice(0, 3)
-      .map((r: { id?: string | number }) => r.id ?? "?")
+      .map((r: unknown) =>
+        r !== null && typeof r === "object" && "id" in r ? String(r.id) : "?",
+      )
       .join(", ");
 
     recordAssertion({
@@ -1434,6 +1471,7 @@ const assertMethods = {
    */
   async tenantIsolation(opts: TenantIsolationOptions): Promise<void> {
     const { table, page } = opts;
+    const selection = tenantColumnSelection(opts.columns);
     if (opts.isolationFixture) {
       const fixture = await withoutAssertionProvenance(async () => {
         const supplied = opts.isolationFixture!;
@@ -1503,10 +1541,15 @@ const assertMethods = {
         const sb = createProofServiceClient();
         // Both directions must have actual rows before recording any passing isolation assertion.
         for (const side of participants) {
-          const count = await countRowsAsService(sb, table, {
-            [opts.scopeColumn]: side.scopeValue,
-            ...(opts.criterion?.where ?? {}),
-          });
+          const count = await countRowsAsService(
+            sb,
+            table,
+            {
+              [opts.scopeColumn]: side.scopeValue,
+              ...(opts.criterion?.where ?? {}),
+            },
+            selection,
+          );
           if (!count)
             throw proofFail(
               "tenant_isolation_vacuous",
@@ -1519,6 +1562,7 @@ const assertMethods = {
           [participants[1], participants[0]],
         ]) {
           const outcome = await probeTenantIsolation({
+            selection,
             table,
             owner: owner.actor,
             viewer: viewer.actor,
@@ -1719,6 +1763,7 @@ const assertMethods = {
         // vacuous pass — a green "tenant isolation holds" on a table with no
         // rows is worse than no proof at all, because it gets believed.
         const forward = await probeTenantIsolation({
+          selection,
           table,
           viewer: userB,
           viewerLabel: "user B",
@@ -1768,6 +1813,7 @@ const assertMethods = {
         // assertion for this probe even against an empty orgB, and that pass was
         // enough on its own to satisfy a mission's trace requirement.
         const reverse = await probeTenantIsolation({
+          selection,
           table,
           viewer: userA,
           viewerLabel: "user A",
