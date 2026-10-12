@@ -65,7 +65,7 @@ process.chdir(CONFIG.rootDir);
 
 const SCHEMA_PATH = CONFIG.artifacts.schema;
 const CAPABILITIES_PATH = CONFIG.artifacts.capabilities;
-const TRACES_DIR = CONFIG.artifacts.traces;
+let TRACES_DIR = CONFIG.artifacts.traces;
 const POLICY_PATH = CONFIG.policies.coverage;
 
 /**
@@ -744,6 +744,13 @@ function printReport(report) {
 
 export function main() {
   const args = process.argv.slice(2);
+  const directoryIndex = args.indexOf("--traces-dir");
+  if (directoryIndex >= 0) {
+    if (!args[directoryIndex + 1] || args[directoryIndex + 1].startsWith("--"))
+      throw new Error("--traces-dir requires a directory");
+    TRACES_DIR = args[directoryIndex + 1];
+    args.splice(directoryIndex, 2);
+  }
   const strict = args.includes("--strict");
   const asJson = args.includes("--json");
 

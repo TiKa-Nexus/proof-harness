@@ -1,3 +1,4 @@
+import { fixtureTiming } from "./timing";
 import { isActionAuthenticationRefusal } from "../shared/action-types";
 import { configuredInsertControl } from "./insert-control";
 import { isDeepStrictEqual } from "node:util";
@@ -1510,7 +1511,7 @@ const assertMethods = {
       const failures: unknown[] = [];
       try {
         const participants = await withoutAssertionProvenance(async () => {
-          const sides = await fixture.setup();
+          const sides = await fixtureTiming("setup", () => fixture.setup());
           const valid = (side: IsolationParticipant) =>
             side &&
             typeof side.scopeValue === "string" &&
@@ -1596,7 +1597,9 @@ const assertMethods = {
         failures.push(error);
       } finally {
         try {
-          await withoutAssertionProvenance(() => fixture.cleanup());
+          await fixtureTiming("cleanup", () =>
+            withoutAssertionProvenance(() => fixture.cleanup()),
+          );
         } catch (error) {
           recordAssertion({
             kind: "tenant_isolation",
@@ -1633,45 +1636,52 @@ const assertMethods = {
     const createdWorkspaces: SeedWorkspace[] = [];
     const createdUsers: SeedUser[] = [];
     try {
-      const orgA = await seed
-        .workspace(`Proof OrgA ${tag}`, {
-          columns: opts.workspaceColumns,
-        })
-        .then((value) => {
-          createdWorkspaces.push(value);
-          return value;
-        });
-      const orgB = await seed
-        .workspace(`Proof OrgB ${tag}`, {
-          columns: opts.workspaceColumns,
-        })
-        .then((value) => {
-          createdWorkspaces.push(value);
-          return value;
-        });
+      const { orgA, orgB, userA, userB } = await fixtureTiming(
+        "setup",
+        async () => {
+          const orgA = await seed
+            .workspace(`Proof OrgA ${tag}`, {
+              columns: opts.workspaceColumns,
+            })
+            .then((value) => {
+              createdWorkspaces.push(value);
+              return value;
+            });
+          const orgB = await seed
+            .workspace(`Proof OrgB ${tag}`, {
+              columns: opts.workspaceColumns,
+            })
+            .then((value) => {
+              createdWorkspaces.push(value);
+              return value;
+            });
 
-      const userA = await seed
-        .user({
-          email: `proof-a-${tag}@proof.test`,
-          password: `ProofPass!${tag}1`,
-          workspace: orgA,
-          role: "owner",
-        })
-        .then((value) => {
-          createdUsers.push(value);
-          return value;
-        });
-      const userB = await seed
-        .user({
-          email: `proof-b-${tag}@proof.test`,
-          password: `ProofPass!${tag}1`,
-          workspace: orgB,
-          role: "owner",
-        })
-        .then((value) => {
-          createdUsers.push(value);
-          return value;
-        });
+          const userA = await seed
+            .user({
+              email: `proof-a-${tag}@proof.test`,
+              password: `ProofPass!${tag}1`,
+              workspace: orgA,
+              role: "owner",
+            })
+            .then((value) => {
+              createdUsers.push(value);
+              return value;
+            });
+          const userB = await seed
+            .user({
+              email: `proof-b-${tag}@proof.test`,
+              password: `ProofPass!${tag}1`,
+              workspace: orgB,
+              role: "owner",
+            })
+            .then((value) => {
+              createdUsers.push(value);
+              return value;
+            });
+
+          return { orgA, orgB, userA, userB };
+        },
+      );
 
       const sb = createProofServiceClient();
 
@@ -1726,10 +1736,14 @@ const assertMethods = {
           // helper's trusted stamp.
           if (opts.fixture) {
             await withoutAssertionProvenance(() =>
-              opts.fixture!.create(fixtureContext),
+              fixtureTiming("setup", () =>
+                opts.fixture!.create(fixtureContext),
+              ),
             );
           } else {
-            await withoutAssertionProvenance(() => opts.setup!(fixtureContext));
+            await fixtureTiming("setup", () =>
+              withoutAssertionProvenance(() => opts.setup!(fixtureContext)),
+            );
           }
         } catch (error) {
           if (!isProofFixturePendingError(error)) throw error;
@@ -1860,7 +1874,9 @@ const assertMethods = {
         if (page) await actAsUser.logout(page);
       }
     } finally {
-      await teardown(createdWorkspaces, createdUsers);
+      await fixtureTiming("cleanup", () =>
+        teardown(createdWorkspaces, createdUsers),
+      );
     }
   },
 

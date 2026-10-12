@@ -60,15 +60,26 @@ const SCHEMA_PATH = CONFIG.artifacts.schema;
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { noRun: false, help: false, tracesDir: TRACES_DIR_DEFAULT };
+  const args = {
+    noRun: false,
+    help: false,
+    tracesDir: TRACES_DIR_DEFAULT,
+    specs: [],
+  };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
+    if (
+      ["--spec", "--traces-dir", "--mission", "--manifest"].includes(v) &&
+      (!argv[i + 1] || argv[i + 1].startsWith("--"))
+    )
+      throw new Error(`${v} requires a value`);
     if (v === "--help" || v === "-h") args.help = true;
     else if (v === "--no-run") args.noRun = true;
     else if (v === "--mission") args.mission = argv[++i];
     else if (v === "--manifest") args.manifestPath = argv[++i];
     else if (v === "--traces-dir") args.tracesDir = argv[++i];
-    else if (v.startsWith("--")) {
+    else if (v === "--spec") args.specs.push(argv[++i]);
+    else {
       console.error(`[proof:verify] unknown flag: ${v}`);
       process.exit(2);
     }
@@ -185,7 +196,7 @@ async function existingProofServerIssue() {
   }
 }
 
-async function runProofs(provenance, tracesDir) {
+async function runProofs(provenance, tracesDir, specs) {
   console.log("[proof:verify] running Playwright proofs project…");
   return new Promise((resolve) => {
     const playwrightArgs = [
@@ -193,9 +204,15 @@ async function runProofs(provenance, tracesDir) {
       "playwright",
       "test",
       "--project=proofs",
-      "--reporter=list",
+      ...(specs ?? []).map(
+        (s) => `${s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      ),
+      process.env.PROOF_EXECUTION_REPORT
+        ? `--reporter=list,${new URL("./proof_execution_reporter.mjs", import.meta.url).pathname}`
+        : "--reporter=list",
     ];
-    if (process.env.CI) {
+    if (specs?.length) playwrightArgs.push("--workers=1");
+    else if (process.env.CI) {
       // GitHub's standard runner has two CPUs. Database fixtures use unique
       // identifiers, so two workers shorten the green suite without sharing
       // browser contexts or weakening any assertion.
@@ -439,6 +456,12 @@ export async function main() {
     return;
   }
 
+  if (
+    args.specs.length &&
+    path.resolve(args.tracesDir) === path.resolve(TRACES_DIR_DEFAULT)
+  )
+    throw new Error("--spec requires a separate --traces-dir");
+
   // Run-level failures that no amount of trace inspection can discover. These
   // are tracked separately from validator issues and folded into the verdict
   // below; a red Playwright run that happens to leave green traces behind must
@@ -464,7 +487,7 @@ export async function main() {
           `[proof:verify] cleared ${removed} previous trace artifact(s) before the run`,
         );
       }
-      const ok = await runProofs(provenance, args.tracesDir);
+      const ok = await runProofs(provenance, args.tracesDir, args.specs);
       if (!ok) {
         // Continue to aggregation so users see trace-level issues too, but
         // remember that the run itself was red.
@@ -485,7 +508,19 @@ export async function main() {
       "[PROOF_FAIL] discovery_unassessed: regenerate complete artifacts",
     );
   const traces = readTraces(args.tracesDir).filter((trace) => !trace.mutation);
-  const resolved = resolveManifest(args);
+  if (args.specs.length) {
+    if (args.noRun || args.manifestPath || args.mission)
+      throw new Error(
+        "scoped verification requires a fresh run without a mission",
+      );
+    if (traces.some((t) => !args.specs.includes(t.specFile)))
+      throw new Error("unexpected spec in scoped baseline");
+    if (args.specs.some((s) => !traces.some((t) => t.specFile === s)))
+      throw new Error("missing spec in scoped baseline");
+  }
+  const resolved = args.specs.length
+    ? { manifest: null, path: null }
+    : resolveManifest(args);
 
   // Zero traces means zero evidence. Reporting that as "0 proof(s) passed" and
   // exiting 0 is the single most dangerous failure mode this tool can have: a

@@ -27,6 +27,89 @@ versions rather than guessing how to interpret them.
 
 ## Prerelease migration notes
 
+### 0.1.0-next.14 — isolated parallel proof gate (release candidate)
+
+Prepared for review, not yet published. Existing serial commands and assertion
+APIs remain supported. After a reviewed publication, consumers adopting the
+parallel gate must pin exactly `proof-harness@0.1.0-next.14` and update their
+lockfile. Do not switch the required release check before parity validation.
+
+The optional `plan`, `verify --plan`, `mutate --plan`, `controls --plan`,
+`finalize`, and `aggregate` commands divide complete proof specs among isolated
+checkouts. No product claims, fixtures, policies or mutation catalogs move into
+the package. Trace schema 2, mission schema 1 and health protocol 1 are unchanged.
+Parallel plans, stage records, execution reports and acceptance reports have
+separate version-1 contracts. They require the exact same harness version,
+source contents, commit, lockfile, generated schema/capabilities, configs,
+catalogs, policies and CI run/attempt throughout a run.
+
+Required integration for parallel execution:
+
+1. Add `.proof/parallel/` to the consumer's generated-output ignores (or configure
+   `artifacts.parallel`). Use fresh checkouts and fresh output directories for
+   each run. Downloaded artifacts also belong under this excluded directory.
+2. Declare `parallel.postChecks` in the protected consumer config as a nonempty
+   array of command argv arrays. Include the consumer's existing database
+   permission and browser permission controls. The package executes every
+   declared command in `finalize`, retains failures, and requires the checks at
+   aggregation. These are consumer trust inputs; the package invents none.
+3. Use one shared planning job, isolated shard jobs, and an always-run final
+   aggregation job. Each shard owns its checkout, local database, dev server,
+   fake services, browser state, build outputs and recovery journal. Two shards
+   cannot share one checkout. Workers remain one within each shard, and
+   mutation retries remain zero. An active-stage lock prevents concurrent stage
+   execution within a checkout.
+4. Regenerate schema/capabilities and perform the existing structural preflight
+   on the same source in each job. Generated artifacts must be deterministic.
+   Keep the existing database baseline and pre-mutation permission checks.
+   The planner uses Playwright discovery, including specs with no mutations;
+   a scoped baseline runs only the assigned complete specs. Automatic mutations
+   are derived from that fresh evidence and rederived from combined evidence
+   during aggregation.
+5. Run `finalize` and upload that shard's directory even when a preceding
+   mutation/control command fails. Keep matrix `fail-fast: false`. A missing,
+   cancelled or failed stage cannot satisfy the final gate. Preserve the
+   existing required check name on the final aggregation job.
+6. Compare serial and parallel runs of the same commit on separate environments:
+   complete test/claim/mutation/control inventories, coverage, exceptions and
+   post-run checks must agree. Validate the packed package and run the
+   consumer's full validation. Measure at least three complete green CI runs
+   before making the parallel gate required. Include setup, artifact transfer,
+   planning and aggregation in the runtime target; package timings omit those
+   external costs. Retain a serial command for investigation and comparison.
+
+Every discovered baseline test must pass and emit trace evidence with matching
+Playwright execution identity. Skipped tests and expected failures cannot count
+as a complete baseline. Baseline retries retain their configured behavior and
+all attempts appear in execution reports. Playwright project dependencies are
+currently rejected by planning: provision shared prerequisites explicitly in
+consumer setup instead. Proof specs must not depend on another spec's fixtures
+or order. Mutation runs must produce complete, non-timeout execution reports as
+well as the correctly mapped failing assertions.
+
+`verify --spec <path> --traces-dir <fresh-directory>` and
+`mutate|controls --spec <path> --baseline-dir <directory>` also support focused
+local diagnosis; repeat `--spec` for multiple specs. They validate the selected
+baseline independently of unrelated old traces. Partial success is not full
+release acceptance. Full coverage and mission validation occur only after the
+parallel aggregator has validated every shard. A custom parallel output path
+must stay excluded from source identity through `artifacts.parallel`.
+
+Mutation summaries retain schema version 1 and add `outcome`, `restoration`,
+`cleanupErrors`, execution status and phase timings. Each mutation produces one
+lifecycle result. An unrelated red claim, missing evidence, timeout or failed
+plant is not reported as a proof that cannot fail. Restore failures retain the
+recovery journal and block acceptance independently of detection. Original
+execution errors and later cleanup errors remain separately available.
+
+Timing history is optional and influences balancing only. It cannot remove
+work or satisfy evidence. There is no evidence reuse or partial-job resume in
+this release: a rerun needs a new plan and all shard results from that attempt.
+After an interrupted local run, use the existing `mutate --recover` procedure
+before discarding its checkout or output; a successful recovery is not a passing
+parallel run. The next clean run must establish new evidence.
+
+
 ### 0.1.0-next.13 — column-restricted tenant isolation (release candidate)
 
 Prepared for release. After publication, pin exactly `proof-harness@0.1.0-next.13`

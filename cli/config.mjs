@@ -10,6 +10,7 @@ const DEFAULT_CONFIG = Object.freeze({
     drift: ".proof/drift.json",
     mutations: ".proof/mutations",
     controlSensitivity: ".proof/control-sensitivity",
+    parallel: ".proof/parallel",
   },
   // The module-descriptor system (module.meta.ts → modules.json and its
   // checker) moved to the consumer template in 0.1.0-next.6: it serves the

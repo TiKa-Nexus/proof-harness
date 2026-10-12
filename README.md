@@ -107,6 +107,87 @@ Disposable users that authenticate a Playwright page must call
 `assert.tenantIsolation({ page })` performs that browser cleanup automatically;
 the page is logged out when the helper returns.
 
+## Optional isolated parallel execution
+
+The next.14 release candidate adds spec-based sharding without changing the
+serial workflow. Adopt it only after review and publication; see the
+[required integration and parity checks](COMPATIBILITY.md#010-next14--isolated-parallel-proof-gate-release-candidate).
+
+The consumer supplies its own post-run commands in `proof.config.mjs`. For
+example, if these scripts exist and cover its database and browser controls:
+
+```js
+export default {
+  // Existing paths, catalogs and trust inputs remain here.
+  parallel: {
+    postChecks: [
+      ["pnpm", "test:permissions"],
+      ["pnpm", "test:profile-permissions"],
+    ],
+  },
+};
+```
+
+After the existing environment setup and structural preflight, create a plan:
+
+```sh
+pnpm exec proof-harness plan --shards 6 \
+  --controls-config proof.controls.config.mjs \
+  --out .proof/parallel/plan.json
+```
+
+Upload the plan for the shard jobs. Each gets a separate checkout, local
+Supabase stack and fake services. After its normal setup and preflight,
+download the plan and run these commands with its zero-based matrix index:
+
+```sh
+pnpm exec proof-harness verify --plan .proof/parallel/plan.json --shard 0
+pnpm exec proof-harness mutate --plan .proof/parallel/plan.json --shard 0
+pnpm exec proof-harness controls --plan .proof/parallel/plan.json --shard 0
+pnpm exec proof-harness finalize --plan .proof/parallel/plan.json --shard 0
+```
+
+Make `finalize` an `if: always()` step, followed by an always-run artifact upload
+of `.proof/parallel/shard-0/` including hidden files. Store each shard under its
+own name and download them as `inputs/shard-0`, `inputs/shard-1`, etc. under
+`.proof/parallel/`. Upload only the plan from the planning job; never distribute
+`environment.json` or `active-stage.lock` between runners. Use six matrix values
+`[0, 1, 2, 3, 4, 5]` with `fail-fast: false`; use fewer for a smaller repository.
+The final job downloads all shards and the plan, regenerates discovery inputs,
+and runs:
+
+```sh
+pnpm exec proof-harness aggregate --plan .proof/parallel/plan.json \
+  --inputs .proof/parallel/inputs
+```
+
+The final job must run even when a shard fails, and its status must also require
+successful planning and shard jobs. Only this complete gate replaces the
+consumer's existing required Proof check. Keep consumer structural, database
+baseline and pre-mutation permission checks in the workflow; `aggregate`
+validates the complete baseline/mission, strict coverage, independently derived
+mutation inventories, mapped failures, restoration and configured postchecks.
+
+GitHub's run ID and attempt identify the run automatically. For local tests,
+set a unique `PROOF_RUN_ID` in every checkout for the same run. Local shards need
+distinct servers and databases as well as checkouts. Do not run multiple shards
+against one mutable environment, even if their traces use different folders.
+
+Successful aggregation writes an acceptance report with stage durations, slow
+specs and total runner time under `.proof/parallel/aggregate-*/acceptance.json`.
+Pass a previous report with `plan --history <file>` to balance by measured spec
+costs. History changes scheduling only; current source and catalogs determine
+all required work. Mutation execution reports retain attempts and first errors;
+SDK fixture setup/cleanup steps provide additional diagnostics. Startup and
+compilation remain part of readiness/execution where no separate measurement
+exists. An 18-minute lane warning signals that CI overhead may push the overall
+Proof job beyond a 20-minute budget.
+
+This is additional parallel capacity, not a fixed runtime guarantee. Benchmark
+with the consumer before switching its required gate, and compare total billed
+runner-minutes as well as elapsed time. Keep caches limited to dependencies;
+do not reuse evidence, database state or mutable application builds.
+
 ## License
 
 Copyright 2026 The Nexus Collective GmbH.

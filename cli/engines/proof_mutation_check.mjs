@@ -4,11 +4,8 @@ import {
   validateTableAcl,
   restoreTableAclSql,
 } from "./proof_table_acl.mjs";
-import {
-  validateControlBaseline,
-  assertionSelectorsTurnedRed,
-} from "./proof_control_sensitivity.mjs";
-import { readTraceDirectory } from "../../dist/node.js";
+import { assertionSelectorsTurnedRed } from "./proof_control_sensitivity.mjs";
+import { readTraceDirectory, sourceHash } from "../../dist/node.js";
 // ---------------------------------------------------------------------------
 // proof_mutation_check.mjs
 //
@@ -47,11 +44,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import nextEnv from "@next/env";
-import {
-  deriveAutomaticRlsMutations,
-  evaluateMutationClaimCoverage,
-  mutationCoversClaim,
-} from "./proof_mutation_inventory.mjs";
+import { buildMutationInventory } from "./proof_inventory_build.mjs";
 import {
   assessPlantedSubject,
   assessSubjectAfterProof,
@@ -77,10 +70,8 @@ loadEnvConfig(CONFIG.rootDir);
 const require = createRequire(import.meta.url);
 
 const CONFIG_TOML = CONFIG.repository.supabaseConfig;
-const TRACE_DIR = CONFIG.artifacts.traces;
-const SCHEMA_PATH = CONFIG.artifacts.schema;
-const MUTATION_POLICY_PATH = CONFIG.policies.mutation;
-const MUTATION_ARTIFACT_DIR = CONTROL_SENSITIVITY
+let TRACE_DIR = CONFIG.artifacts.traces;
+let MUTATION_ARTIFACT_DIR = CONTROL_SENSITIVITY
   ? CONFIG.artifacts.controlSensitivity
   : CONFIG.artifacts.mutations;
 const RECOVERY_FILE = path.join(
@@ -400,111 +391,10 @@ const PROOFS_DIR = CONFIG.roots.proofs;
 function listSpecs() {
   if (!fs.existsSync(PROOFS_DIR)) return [];
   return fs
-    .readdirSync(PROOFS_DIR)
+    .readdirSync(PROOFS_DIR, { recursive: true })
     .filter((f) => f.endsWith(".proof.ts"))
     .map((f) => path.join(PROOFS_DIR, f))
     .sort();
-}
-
-function readMutationPolicy() {
-  try {
-    const policy = JSON.parse(fs.readFileSync(MUTATION_POLICY_PATH, "utf8"));
-    if (policy.schemaVersion !== 1) {
-      return {
-        policy: { acceptedClaims: [] },
-        problems: [
-          `${MUTATION_POLICY_PATH} has unsupported schemaVersion ${policy.schemaVersion ?? "<missing>"}; expected 1`,
-        ],
-      };
-    }
-    return { policy, problems: [] };
-  } catch (error) {
-    return {
-      policy: { acceptedClaims: [] },
-      problems: [
-        `cannot read ${MUTATION_POLICY_PATH}: ${error instanceof Error ? error.message : String(error)}`,
-      ],
-    };
-  }
-}
-
-function buildMutationInventory() {
-  if (CONTROL_SENSITIVITY) {
-    if (!CONFIG.controlSensitivityCatalog)
-      throw new Error(
-        "[PROOF_FAIL] control_contract: configure a separate controlSensitivityCatalog",
-      );
-    const traces = readTraceDirectory(TRACE_DIR, {
-      rootDir: CONFIG.rootDir,
-      excludedPaths: evidenceExclusions(CONFIG),
-    });
-    const ids = new Set();
-    const mutations = MUTATIONS.map((m) => {
-      if (ids.has(m.id)) throw new Error("duplicate control-sensitivity id");
-      ids.add(m.id);
-      return { ...m, resolvedControls: validateControlBaseline(m, traces) };
-    });
-    return {
-      mutations,
-      problems: [],
-      claims: [],
-      acceptedClaims: [],
-      uncoveredClaims: [],
-      uncoveredActionClaims: [],
-    };
-  }
-  const derived = deriveAutomaticRlsMutations({
-    tracesDir: TRACE_DIR,
-    excludedPaths: evidenceExclusions(CONFIG),
-    schemaPath: SCHEMA_PATH,
-    explicitMutations: MUTATIONS,
-  });
-  const mutations = [...MUTATIONS, ...derived.mutations];
-  const ids = new Set();
-  const problems = [...derived.problems];
-
-  for (const mutation of mutations) {
-    if (ids.has(mutation.id)) {
-      problems.push(`duplicate mutation id "${mutation.id}"`);
-    }
-    ids.add(mutation.id);
-  }
-
-  const loadedPolicy = readMutationPolicy();
-  const claimCoverage = evaluateMutationClaimCoverage({
-    claims: derived.claims,
-    evidence: derived.evidence,
-    mutations,
-    policy: loadedPolicy.policy,
-  });
-  problems.push(...loadedPolicy.problems, ...claimCoverage.problems);
-  for (const claim of claimCoverage.uncoveredClaims) {
-    problems.push(
-      `${claim.spec} has no mutation or accepted policy entry for ${claim.kind}:${claim.target}:${claim.operation}`,
-    );
-  }
-
-  const mutationsWithClaims = mutations.map((mutation) => ({
-    ...mutation,
-    resolvedClaims: derived.claims
-      .filter((claim) => mutationCoversClaim(mutation, claim))
-      .map((claim) => ({
-        kind: claim.kind,
-        target: claim.target,
-        operation: claim.operation,
-      })),
-  }));
-
-  return {
-    mutations: mutationsWithClaims,
-    problems,
-    claims: derived.claims,
-    acceptedClaims: claimCoverage.acceptedClaims,
-    uncoveredClaims: claimCoverage.uncoveredClaims,
-    uncoveredActionClaims: claimCoverage.uncoveredClaims.filter((claim) =>
-      /^[A-Za-z][\w-]*:[A-Za-z][\w-]*$/.test(claim.target),
-    ),
-  };
 }
 
 /**
@@ -649,6 +539,10 @@ function waitForExit(child, timeoutMs) {
  */
 async function sharedDevServer() {
   if (await serverIsReachable(DEV_SERVER_URL)) {
+    if (process.env.PROOF_REQUIRE_OWNED_SERVER === "true")
+      throw new Error(
+        "parallel mutations require a fresh runner-owned server; stop the existing process first",
+      );
     const issue = await proofServerIssue(DEV_SERVER_URL);
     if (issue) {
       throw new Error(
@@ -844,7 +738,7 @@ function writeMutationSummary(results, inventory) {
   );
 }
 
-function runProof(spec, mutationId, traceDirectory) {
+function runProof(spec, mutationId, traceDirectory, executionSourceHash) {
   return new Promise((resolve) => {
     const playwrightCli = require.resolve("@playwright/test/cli");
     const child = spawn(
@@ -853,8 +747,8 @@ function runProof(spec, mutationId, traceDirectory) {
         playwrightCli,
         "test",
         "--project=proofs",
-        spec,
-        "--reporter=line",
+        `${spec.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+        `--reporter=line,${fileURLToPath(new URL("./proof_execution_reporter.mjs", import.meta.url))}`,
         // A planted defect is expected to turn the proof red. Retrying that
         // deliberate failure only reruns the same proof against the same
         // broken database, multiplying mutation time without adding evidence.
@@ -868,7 +762,15 @@ function runProof(spec, mutationId, traceDirectory) {
           CI: process.env.CI ?? "",
           PLAYWRIGHT_REUSE_EXISTING_SERVER: "true",
           PROOF_MUTATION_ID: mutationId,
+          ...(executionSourceHash
+            ? { PROOF_SOURCE_HASH: executionSourceHash }
+            : {}),
           PROOF_TRACES_DIR: path.resolve(traceDirectory),
+          PROOF_EXECUTION_REPORT: path.resolve(
+            traceDirectory,
+            "../",
+            `${mutationId}-execution.json`,
+          ),
         },
       },
     );
@@ -895,14 +797,22 @@ function runProof(spec, mutationId, traceDirectory) {
 // ---------------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const args = { inventory: false, list: false };
+  const args = { inventory: false, list: false, specs: [] };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
+    if (
+      ["--only", "--spec", "--baseline-dir", "--output-dir"].includes(v) &&
+      (!argv[i + 1] || argv[i + 1].startsWith("--"))
+    )
+      throw new Error(`${v} requires a value`);
     if (v === "--control-sensitivity") continue;
     if (v === "--inventory") args.inventory = true;
     else if (v === "--recover") args.recover = true;
     else if (v === "--list") args.list = true;
     else if (v === "--only") args.only = argv[++i];
+    else if (v === "--spec") args.specs.push(argv[++i]);
+    else if (v === "--baseline-dir") args.baselineDir = argv[++i];
+    else if (v === "--output-dir") args.outputDir = argv[++i];
     else if (v === "--help" || v === "-h") args.help = true;
     else {
       console.error(`[mutation] unknown flag: ${v}`);
@@ -943,7 +853,33 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
     return;
   }
 
-  const inventory = buildMutationInventory();
+  if (args.baselineDir) TRACE_DIR = path.resolve(args.baselineDir);
+  if (args.outputDir) MUTATION_ARTIFACT_DIR = path.resolve(args.outputDir);
+  if (args.specs.length && !args.baselineDir)
+    throw new Error("--spec requires a fresh --baseline-dir");
+  if (args.specs.some((s) => !listSpecs().includes(s)))
+    throw new Error("unknown proof spec");
+  if (args.specs.length) {
+    const traces = readTraceDirectory(TRACE_DIR, {
+      rootDir: CONFIG.rootDir,
+      excludedPaths: evidenceExclusions(CONFIG),
+    });
+    if (
+      traces.some(
+        (t) => t.mutation || !args.specs.includes(t.specFile) || !t.passed,
+      )
+    )
+      throw new Error("scoped baseline contains unexpected or failed traces");
+    if (args.specs.some((s) => !traces.some((t) => t.specFile === s)))
+      throw new Error("scoped baseline is incomplete");
+  }
+  const inventory = buildMutationInventory({
+    config: CONFIG,
+    mutations: MUTATIONS,
+    controlSensitivity: CONTROL_SENSITIVITY,
+    tracesDir: TRACE_DIR,
+    specs: args.specs.length ? args.specs : null,
+  });
   const mutations = inventory.mutations;
 
   if (args.inventory) {
@@ -1018,6 +954,15 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
     ...requested.filter((mutation) => isSourceMutation(mutation)),
   ];
 
+  if (
+    selected.length === 0 &&
+    args.specs.length &&
+    !args.only &&
+    coverageProblems.length === 0
+  ) {
+    writeMutationSummary([], inventory);
+    return;
+  }
   if (selected.length === 0) {
     console.error(
       `[mutation] no mutation with id "${args.only}"; run --list to see them`,
@@ -1094,6 +1039,23 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
       let snapshot = null;
       let applied = false;
       let sourceServer = null;
+      const result = {
+        id: m.id,
+        spec: m.spec,
+        outcome: "setup_failure",
+        restoration: "not_needed",
+        cleanupErrors: [],
+        timings: {},
+      };
+      results.push(result);
+      let phase = "snapshot";
+      let phaseStart = performance.now();
+      const stage = (name) => {
+        result.timings[phase] =
+          (result.timings[phase] ?? 0) + performance.now() - phaseStart;
+        phase = name;
+        phaseStart = performance.now();
+      };
       try {
         handler.preflight?.(container, m.subject);
         snapshot = handler.snapshot(container, m.subject);
@@ -1121,11 +1083,14 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
           { mode: 0o600, flag: "wx" },
         );
         applied = true;
+        result.restoration = "unknown";
+        stage("plant");
         applyMutation(container, m, snapshot);
 
         // A defect that is not demonstrably live proves nothing: running the
         // proof anyway would blame the proof ("MISSED") for a plant that never
         // happened. Read the subject back and refuse to continue on mismatch.
+        stage("plantReadback");
         const plantedSnapshot = handler.snapshot(container, m.subject);
         const plantProblem = assessPlantedSubject({
           id: m.id,
@@ -1135,6 +1100,8 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
           applyDoesNotChangeSubject: m.applyDoesNotChangeSubject === true,
         });
         if (plantProblem) throw new Error(plantProblem);
+        result.plantVerified = true;
+        stage("readiness");
 
         if (isSourceMutation(m)) {
           if (devServer) {
@@ -1147,16 +1114,32 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
         }
 
         const traceDirectory = path.join(MUTATION_ARTIFACT_DIR, ".runs", m.id);
+        stage("execution");
+        result.executionSourceHash = sourceHash(CONFIG.rootDir, [
+          ...evidenceExclusions(CONFIG),
+          MUTATION_ARTIFACT_DIR,
+          TRACE_DIR,
+        ]);
         const { code, output, timedOut } = await runProof(
           m.spec,
           m.id,
           traceDirectory,
+          result.executionSourceHash,
         );
+        fs.writeFileSync(
+          path.join(MUTATION_ARTIFACT_DIR, ".runs", `${m.id}-output.txt`),
+          output,
+        );
+        result.playwrightFailed = code !== 0;
+        result.exitCode = code;
+        result.timedOut = timedOut === true;
         if (timedOut)
           throw new Error(
             "mutation proof timed out; no detection verdict can be issued",
           );
         if (interrupted) throw new Error("mutation run interrupted");
+        if (!Number.isInteger(code))
+          throw new Error("proof process terminated without an exit status");
         const playwrightFailed = code !== 0;
 
         // The defect must still be live now that the proof has finished. If
@@ -1164,6 +1147,7 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
         // re-granting a revoked privilege), the proof's verdict — green or
         // red — says nothing about the proof, and archiving it as MISSED
         // would misdirect the operator toward a working proof.
+        stage("finalPlantVerification");
         const afterProofSnapshot = handler.snapshot(container, m.subject);
         const liveProblem = assessSubjectAfterProof({
           id: m.id,
@@ -1174,6 +1158,18 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
           applyDoesNotChangeSubject: m.applyDoesNotChangeSubject === true,
         });
         if (liveProblem) throw new Error(liveProblem);
+        if (
+          result.executionSourceHash &&
+          result.executionSourceHash !==
+            sourceHash(CONFIG.rootDir, [
+              ...evidenceExclusions(CONFIG),
+              MUTATION_ARTIFACT_DIR,
+              TRACE_DIR,
+            ])
+        )
+          throw new Error("source changed during mutation execution");
+        result.liveVerified = true;
+        stage("evidence");
 
         // A proof can fail for the wrong reason (a crash, a timeout, a missing
         // browser). Where the reason matters — as with the deny-all mutation that
@@ -1190,7 +1186,14 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
           ? archived.controlRejected
           : archived.detected;
 
-        results.push({
+        Object.assign(result, {
+          outcome: detected
+            ? reasonOk
+              ? "detected"
+              : "wrong_reason"
+            : playwrightFailed
+              ? "wrong_claim"
+              : "survived",
           id: m.id,
           detected: archived.detected,
           controlRejected: archived.controlRejected,
@@ -1217,6 +1220,7 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
             `   ✗ WRONG REASON — the proof failed, but not via "${m.expectFailureContains}".`,
           );
         } else if (
+          playwrightFailed &&
           !(CONTROL_SENSITIVITY
             ? archived.controlsTurnedRed
             : archived.claimsTurnedRed)
@@ -1230,24 +1234,35 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
           );
         }
       } catch (err) {
-        results.push({ id: m.id, error: String(err?.message ?? err) });
+        result.error ??= String(err?.message ?? err);
+        result.outcome = result.timedOut
+          ? "timeout"
+          : ["plant", "plantReadback", "finalPlantVerification"].includes(phase)
+            ? "plant_failure"
+            : phase === "evidence"
+              ? "missing_or_invalid_evidence"
+              : "setup_failure";
         console.log(`   ! ERROR — ${err?.message ?? err}`);
       } finally {
+        stage("cleanup");
         let stopError = null;
         if (sourceServer) {
           try {
             await sourceServer.stop();
           } catch (error) {
             stopError = error;
+            result.cleanupErrors.push(String(error?.message ?? error));
           }
         }
         if (applied) {
+          stage("restoration");
           try {
             // Trust nothing: restore from the exact snapshot and read back.
             // Source mutations preserve dirty working-tree contents byte-for-byte;
             // database mutations preserve the live object's catalog definition.
             restoreMutation(container, m, handler, snapshot);
             fs.unlinkSync(RECOVERY_FILE);
+            result.restoration = "verified";
             console.log(
               `   reverted (${handler.describe(m.subject)} verified)\n`,
             );
@@ -1259,16 +1274,30 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
               `\n[mutation] FAILED TO REVERT "${m.id}". The local checkout is still vulnerable. ` +
                 `${recovery}\n${err?.message ?? err}\n`,
             );
-            process.exit(3);
+            result.restoration = "failed";
+            result.cleanupErrors.push(String(err?.message ?? err));
+            result.error ??= String(err?.message ?? err);
           }
         }
+        stage("complete");
+        writeMutationSummary(results, inventory);
+        if (result.restoration === "failed")
+          throw new Error("restoration failed; recovery journal retained");
         if (stopError) throw stopError;
       }
     }
   } finally {
     process.removeListener("SIGINT", onSignal);
     process.removeListener("SIGTERM", onSignal);
-    if (devServer) await devServer.stop();
+    try {
+      if (devServer) await devServer.stop();
+    } catch (error) {
+      if (results.length)
+        results.at(-1).cleanupErrors.push(String(error?.message ?? error));
+      throw error;
+    } finally {
+      writeMutationSummary(results, inventory);
+    }
   }
 
   writeMutationSummary(results, inventory);
@@ -1276,6 +1305,8 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
   const missed = results.filter(
     (r) =>
       r.error ||
+      r.restoration !== "verified" ||
+      r.cleanupErrors.length > 0 ||
       !(CONTROL_SENSITIVITY ? r.controlRejected : r.detected) ||
       !r.reasonOk,
   );
@@ -1285,28 +1316,16 @@ Both verify planting, run the proof, restore, and fail on incomplete evidence.`)
 
   console.log("── summary ─────────────────────────────────────────");
   for (const r of results) {
-    const verdict = CONTROL_SENSITIVITY
-      ? r.error
-        ? `ERROR (${r.error})`
-        : r.controlRejected && r.reasonOk
-          ? "CONTROL REJECTED"
-          : "CONTROL NOT REJECTED"
-      : r.error
-        ? `ERROR (${r.error.split("\n")[0]})`
-        : r.claimsTurnedRed === false
-          ? "WRONG CLAIM"
-          : !r.detected
-            ? "MISSED"
-            : !r.reasonOk
-              ? `WRONG REASON (expected ${r.expectedReason})`
-              : "detected";
+    const verdict = r.error
+      ? `${r.outcome}: ${r.error.split("\n")[0]}`
+      : r.outcome;
     console.log(`   ${r.id}: ${verdict}`);
   }
 
   if (missed.length > 0) {
     console.error(
       `\n[PROOF_FAIL] ${CONTROL_SENSITIVITY ? "control_sensitivity_check" : "mutation_check"}: ${missed.length} of ${results.length} planted defect(s) were not properly detected. ` +
-        `The affected proofs cannot fail, so their green status means nothing.`,
+        `See individual outcomes: unrelated failures and missing evidence do not demonstrate detection.`,
     );
     process.exit(1);
   }
