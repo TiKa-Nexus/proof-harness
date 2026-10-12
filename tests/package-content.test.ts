@@ -54,7 +54,7 @@ describe("proof-harness package contents", () => {
     ) as Record<string, unknown>;
     expect(manifest).toMatchObject({
       name: "proof-harness",
-      version: "0.1.0-next.13",
+      version: "0.1.0-next.14",
       license: "Apache-2.0",
       repository: {
         type: "git",
@@ -84,8 +84,8 @@ describe("proof-harness package contents", () => {
 
     expect(packed).toMatchObject({
       name: "proof-harness",
-      version: "0.1.0-next.13",
-      filename: "proof-harness-0.1.0-next.13.tgz",
+      version: "0.1.0-next.14",
+      filename: "proof-harness-0.1.0-next.14.tgz",
     });
     expect(files).toEqual(
       expect.arrayContaining([
@@ -96,6 +96,9 @@ describe("proof-harness package contents", () => {
         "PROOF_SDK_CONTRACT.md",
         "cli/proof-harness.mjs",
         "cli/config.mjs",
+        "cli/engines/proof_parallel.mjs",
+        "cli/engines/proof_execution_reporter.mjs",
+        "proof-consumer-fixtures/parallel/contract.json",
         "dist/shared.js",
         "dist/shared.d.ts",
         "dist/node.js",
@@ -205,6 +208,29 @@ describe("proof-harness package contents", () => {
       consumer,
     );
     expect(binOutput).toContain("Usage: proof-harness");
+    const parallel = spawnSync(
+      "pnpm",
+      ["exec", "vitest", "run", "conformance/parallel-runner.test.ts"],
+      {
+        cwd: ROOT,
+        encoding: "utf8",
+        timeout: 120_000,
+        env: {
+          ...process.env,
+          PROOF_TEST_CLI: path.join(
+            consumer,
+            "node_modules/proof-harness/cli/proof-harness.mjs",
+          ),
+          PROOF_TEST_SDK: path.join(
+            consumer,
+            "node_modules/proof-harness/dist/playwright.js",
+          ),
+          PROOF_TEST_NODE_MODULES: path.join(consumer, "node_modules"),
+        },
+      },
+    );
+    expect(parallel.status, parallel.stdout + parallel.stderr).toBe(0);
+
     expect(
       run(
         "node",

@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "planRequired": [
+    "schemaVersion",
+    "kind",
+    "id",
+    "identity",
+    "tests",
+    "shards"
+  ],
+  "stageRequired": [
+    "schemaVersion",
+    "kind",
+    "planId",
+    "identity",
+    "shard",
+    "environmentId",
+    "baselineId",
+    "stage",
+    "passed",
+    "durationMs"
+  ],
+  "stages": ["verify", "mutate", "controls", "finalize"],
+  "mutationOutcomes": [
+    "detected",
+    "survived",
+    "wrong_claim",
+    "wrong_reason",
+    "setup_failure",
+    "timeout",
+    "missing_or_invalid_evidence",
+    "plant_failure"
+  ],
+  "rejections": [
+    "missing_shard",
+    "duplicate_shard",
+    "unexpected_test",
+    "missing_test",
+    "stale_source",
+    "different_attempt",
+    "different_environment",
+    "missing_baseline",
+    "failed_restoration",
+    "failed_postcheck"
+  ]
+}

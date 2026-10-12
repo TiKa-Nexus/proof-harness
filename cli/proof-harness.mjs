@@ -23,6 +23,7 @@ function printHelp() {
 
 Commands:
   scan, parse, registry, build, verify, coverage, inventory, drift, mutate, controls
+  plan, finalize, aggregate (isolated parallel proof execution)
 
 Repository paths and the protected mutation catalog are read from
 proof.config.mjs. Missing config falls back to a conventional application layout.`);
@@ -66,6 +67,14 @@ export async function runCli(argv = process.argv.slice(2)) {
   }
 
   const config = await loadProofConfig({ configPath });
+  if (
+    ["plan", "aggregate", "finalize"].includes(command) ||
+    args.includes("--plan")
+  ) {
+    const { runParallel } = await import("./engines/proof_parallel.mjs");
+    await runParallel(config, command, args);
+    return 0;
+  }
   if (command === "build") {
     for (const [step, stepArgs] of [
       ["scan", []],

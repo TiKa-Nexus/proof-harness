@@ -149,6 +149,17 @@ test('controlled trace fixture',()=>{
         ),
       );
       expect(summary.schemaVersion).toBe(1);
+      const lifecycle = (
+        isPrimaryRun ? summary.mutations : summary.controls
+      )[0];
+      expect(isPrimaryRun ? summary.mutations : summary.controls).toHaveLength(
+        1,
+      );
+      expect(lifecycle.restoration).toBe("verified");
+      expect(lifecycle.cleanupErrors).toEqual([]);
+      expect(lifecycle.outcome).toBe(accepted ? "detected" : "wrong_claim");
+      expect(lifecycle.timings.execution).toBeGreaterThan(0);
+      expect(lifecycle.timings.restoration).toBeGreaterThanOrEqual(0);
       if (isPrimaryRun) {
         expect(summary.mode).toBe("primary-mutation");
         expect(summary.controls).toBeUndefined();
